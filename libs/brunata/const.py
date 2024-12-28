@@ -13,6 +13,7 @@ CLIENT_ID = "e1d10965-78dc-4051-a1e5-251483e74d03"
 REDIRECT = f"{BASE_URL}/auth-response"
 
 CONSUMPTION_URL = f"{BASE_URL}/consumption-overview"
+METERS_URL = f"{BASE_URL}/react-online/meters-values"
 
 # Default headers
 HEADERS = {

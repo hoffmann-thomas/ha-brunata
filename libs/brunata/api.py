@@ -24,7 +24,7 @@ from .const import (
     OAUTH2_URL,
     REDIRECT,
     Consumption,
-    Interval,
+    Interval, METERS_URL,
 )
 
 logging.basicConfig(level=logging.DEBUG)
@@ -67,6 +67,10 @@ class BrunataOnlineApiClient:
         self._water = {}
         self._heating = {}
         self._tokens = {}
+        self._meters = {}
+        self._meter_types_map = {}
+        self._meter_units_map = {}
+        self._allocation_unit_map = {}
         self._session.headers.update(HEADERS)
 
     def _is_token_valid(self, token: str) -> bool:
@@ -234,6 +238,75 @@ class BrunataOnlineApiClient:
             _LOGGER.error("Failed to get tokens")
         return bool(self._tokens)
 
+    async def _init_mappers(self, locale: str = "en") -> bool | None:
+        if not await self._get_tokens():
+            return
+        result = await (
+            await self.api_wrapper(
+                method="GET",
+                url=f"{API_URL}/locales/{locale}/common",
+                headers={
+                    "Referer": CONSUMPTION_URL,
+                },
+            )
+        ).json()
+        self._meter_types_map = { str(k): v for (k, v) in enumerate(result["mappers"]["meterType"]) }
+        self._meter_units_map = { str(k): v for (k, v) in enumerate(result["mappers"]["measurementUnit"]) }
+        self._allocation_unit_map = result["mappers"]["allocationUnitMap"]
+
+        return True
+
+    async def _fetch_meters(self) -> bool | None:
+        if not await self._get_tokens():
+            return
+        if not await self._init_mappers():
+            return
+        date = datetime.now()
+        date = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        result = await (
+            await self.api_wrapper(
+                method="GET",
+                url=f"{API_URL}/consumer/meters",
+                params={
+                    "startdate": f"{date.isoformat()}.000Z",
+                },
+                headers={
+                    "Referer": METERS_URL,
+                },
+            )
+        ).json()
+
+        updated = False
+        for item in result:
+            json_meter = item["meter"]
+            # Rien: my instance has a "shadow meter" without readings for each meter available with the same meterNo,
+            # but the meterType is "Pulse Collector" and superAllocationUnit is null.
+            # I am filtering out these here, but I do not know what their purpose is...
+            if json_meter["superAllocationUnit"] is None:
+                continue
+            json_reading = item["reading"]
+            meter_id = str(json_meter["meterId"])
+
+            meter = self._meters.get(meter_id)
+            if meter is None:
+                meter = Meter(self, json_meter)
+                self._meters[meter_id] = meter
+                _LOGGER.debug("New meter found: %s", meter)
+            updated |= meter.add_reading(json_reading)
+        return updated
+
+    async def available_meters(self):
+        if not await self._get_tokens():
+            return
+        if not await self._fetch_meters():
+            return
+        return self._meters.values()
+
+    async def update_meters(self):
+        if not await self._get_tokens():
+            return
+        return await self._fetch_meters()
+
     async def fetch_meters(self) -> None:
         """Get all meters associated with the account."""
         if not await self._get_tokens():
@@ -365,3 +438,51 @@ class BrunataOnlineApiClient:
                 )
             except Exception as exception:  # pylint: disable=broad-except
                 _LOGGER.error("Something really wrong happened! - %s", exception)
+
+class Reading:
+    def __init__(self, meter, id: str | None, reading_value: float, reading_date: datetime):
+        self._meter = meter
+        self._id = id
+        self.value = reading_value
+        self.date = reading_date
+
+    def __str__(self):
+        return f"{self.value}{self._meter.meter_unit} @{self.date}"
+
+class Meter:
+    """
+    Representing a single meter
+    """
+    def __init__(self, api: BrunataOnlineApiClient, json_meter: dict[str, str]):
+        self._api = api
+
+        self._meter_no = str(json_meter["meterNo"])
+        self._meter_type_id = str(json_meter["meterType"])
+        self._meter_unit_id = str(json_meter["unit"])
+        self._allocation_unit_id = str(json_meter["allocationUnit"])
+
+        self.meter_type = api._meter_types_map[self._meter_type_id]
+        self.meter_unit = api._meter_units_map[self._meter_unit_id]
+        self.allocation_unit = api._allocation_unit_map[self._allocation_unit_id]
+        self._readings: dict[datetime, Reading] = {}
+        self.latest_reading: Reading | None = None
+
+    def add_reading(self, reading_json: dict[str, str]) -> bool:
+        value = float(reading_json["value"]) if reading_json["value"] else None
+        date = datetime.fromisoformat(reading_json["readingDate"]) if reading_json["readingDate"] else None
+        rid = reading_json["readingId"]
+        if date is not None and date not in self._readings:
+            reading = Reading(self, rid, value, date)
+            self._readings[date] = reading
+            if self.latest_reading is None or self.latest_reading.date < date:
+                self.latest_reading = reading
+            _LOGGER.debug("Updated %s with new reading", self)
+            return True
+        else:
+            return False
+
+    def all_readings(self) -> list[Reading]:
+        return list(sorted(self._readings.values(), key=lambda r: r.date))
+
+    def __str__(self):
+        return f"Meter({self.allocation_unit} ({self.meter_type}) - last_reading: {self.latest_reading})"
