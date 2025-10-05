@@ -1,7 +1,6 @@
 """Sensor platform for Brunata Online."""
 import logging
 from datetime import datetime, timedelta, UTC
-from typing import Any, Coroutine
 from zoneinfo import ZoneInfo
 
 import pytz
@@ -19,9 +18,9 @@ from homeassistant.const import UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.util import Throttle
 
-from libs.brunata.brunata_api.meter_reader import Meter
-from libs.brunata.const import Consumption
-from libs.brunata.models import TimeSeries
+from custom_components.brunata_online.api.brunata_api.meter_reader import Meter
+from custom_components.brunata_online.api.const import Consumption
+from custom_components.brunata_online.api.models import TimeSeries
 from . import BrunataOnlineDataUpdateCoordinator
 
 from .const import DEFAULT_NAME, DOMAIN, ICON, SCAN_INTERVAL, SENSOR

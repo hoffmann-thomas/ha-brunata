@@ -2,7 +2,7 @@
 
 import logging
 
-from libs.brunata.api import BrunataOnlineApiClient as ApiClient
+from custom_components.brunata_online.api.api import BrunataOnlineApiClient as ApiClient
 
 TIMEOUT = 10
 _LOGGER: logging.Logger = logging.getLogger(__package__)
