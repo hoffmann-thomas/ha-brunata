@@ -7,7 +7,9 @@ https://github.com/YukiElectronics/ha-brunata
 
 import asyncio
 import logging
+from typing import NamedTuple
 
+from aiohttp import ClientSession
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.core_config import Config
@@ -16,7 +18,6 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from custom_components.brunata_online.api.brunata_api.client import BrunataClient
 from .Coordinator import BrunataOnlineDataUpdateCoordinator
-from .api.models import BrunataClientConfiguration
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
@@ -90,3 +91,10 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)
+
+
+class BrunataClientConfiguration(NamedTuple):
+    username: str
+    password: str
+    session: ClientSession
+    locale: str
