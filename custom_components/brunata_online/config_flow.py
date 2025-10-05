@@ -5,8 +5,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 import voluptuous as vol
 
-from .api.brunata_api.models import BrunataClientConfiguration
-from .api.brunata_api.client import BrunataClient
+from . import BrunataClientConfiguration, BrunataClient
 from .const import CONF_PASSWORD, CONF_USERNAME, DOMAIN, PLATFORMS
 
 

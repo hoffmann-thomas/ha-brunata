@@ -15,8 +15,8 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from custom_components.brunata_online.api.brunata_api.client import BrunataClient
-from custom_components.brunata_online.api.brunata_api.models import BrunataClientConfiguration
 from .Coordinator import BrunataOnlineDataUpdateCoordinator
+from .api.models import BrunataClientConfiguration
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 

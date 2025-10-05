@@ -1,3 +1,8 @@
+from typing import NamedTuple
+
+from aiohttp import ClientSession
+
+
 class TimeSeries:
     '''
     Class representing a parsed time series data for a single day.
@@ -36,3 +41,8 @@ class TimeSeries:
 
         return total
 
+class BrunataClientConfiguration(NamedTuple):
+    username: str
+    password: str
+    session: ClientSession
+    locale: str

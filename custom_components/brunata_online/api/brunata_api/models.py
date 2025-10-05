@@ -74,9 +74,5 @@ class ConsumptionResult(BaseModel):
     interval: str
     consumptionLines: list[ConsumptionLine]
 
-class BrunataClientConfiguration(NamedTuple):
-    username: str
-    password: str
-    session: ClientSession
-    locale: str
+
 

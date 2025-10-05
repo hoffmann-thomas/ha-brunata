@@ -48,3 +48,4 @@ class MeterDataSet:
     def get_meter(self, entity_id: str) -> Optional[MeterData]:
         meter = self.meters.get(entity_id)
         return meter
+

@@ -18,10 +18,10 @@ from homeassistant.const import UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.util import Throttle
 
-from .api.brunata_api.meter_reader import Meter
+from . import BrunataOnlineDataUpdateCoordinator
+from .api.api import Meter
 from .api.const import Consumption
 from .api.models import TimeSeries
-from . import BrunataOnlineDataUpdateCoordinator
 from .const import DEFAULT_NAME, DOMAIN, ICON, SCAN_INTERVAL, SENSOR
 from .entity import BrunataOnlineEntity
 from .models import MeterDataSet
