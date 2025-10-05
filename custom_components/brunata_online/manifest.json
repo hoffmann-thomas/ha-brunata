@@ -3,6 +3,7 @@
   "name": "Brunata Online",
   "codeowners": ["@hoffmann-thomas", "@YukiElectronics"],
   "config_flow": true,
+  "version": "0.0.1",
   "dependencies": [],
   "documentation": "https://github.com/hoffmann-thomas/brunata-online",
   "integration_type": "hub",
