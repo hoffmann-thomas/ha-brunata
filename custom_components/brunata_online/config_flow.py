@@ -1,4 +1,5 @@
 """Adds config flow for Brunata Online."""
+import logging
 
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -8,6 +9,7 @@ import voluptuous as vol
 from . import BrunataClient
 from .const import CONF_PASSWORD, CONF_USERNAME, DOMAIN, PLATFORMS
 
+_LOGGER: logging.Logger = logging.getLogger(__package__)
 
 class BrunataOnlineFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for brunata_online."""
@@ -60,10 +62,12 @@ class BrunataOnlineFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     async def _test_credentials(self, username, password):
         """Return true if credentials is valid."""
         try:
+
             session = async_create_clientsession(self.hass)
             client = BrunataClient(username, password, session, "en")
             result = await client.get_meters()
-            return result is not None
+            _LOGGER.info(result)
+            return True
         except Exception:  # pylint: disable=broad-except
             pass
         return False
