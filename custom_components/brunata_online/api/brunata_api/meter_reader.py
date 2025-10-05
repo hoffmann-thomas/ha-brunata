@@ -3,8 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from libs.brunata.brunata_api.models import MappersConfiguration, \
-    AllocationUnitResult, MeterResult, ConsumptionResult, ConsumptionValueDto
+from custom_components.brunata_online.api.brunata_api.models import ConsumptionValueDto, MappersConfiguration, \
+    AllocationUnitResult, MeterResult, ConsumptionResult
 
 
 class Meter(BaseModel):

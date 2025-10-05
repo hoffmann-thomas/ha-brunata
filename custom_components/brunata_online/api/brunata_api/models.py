@@ -5,8 +5,6 @@ from aiohttp import ClientSession
 from pydantic import BaseModel, RootModel
 from typing_extensions import NamedTuple
 
-from libs.brunata.const import Interval
-
 class AllocationUnit(BaseModel):
     superAllocationUnit: int
     allocationUnits: list[str]

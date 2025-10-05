@@ -1,10 +1,10 @@
 import logging
 from datetime import datetime
 
-from libs.brunata.brunata_api.api2 import BrunataApi
-from libs.brunata.brunata_api.meter_reader import MeterReader, Meter, ConsumptionReading
-from libs.brunata.brunata_api.models import BrunataClientConfiguration
-from libs.brunata.const import Consumption, Interval
+from custom_components.brunata_online import BrunataClientConfiguration
+from custom_components.brunata_online.api.brunata_api.api2 import BrunataApi
+from custom_components.brunata_online.api.brunata_api.meter_reader import MeterReader, ConsumptionReading, Meter
+from custom_components.brunata_online.api.const import Interval, Consumption
 
 logging.basicConfig(level=logging.DEBUG)
 _LOGGER: logging.Logger = logging.getLogger(__package__)

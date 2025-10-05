@@ -5,7 +5,7 @@ import asyncio
 import aiohttp
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from custom_components.brunata_online.api import BrunataOnlineApiClient
+from custom_components.brunata_online.api.api import BrunataOnlineApiClient
 
 
 async def test_api(hass, aioclient_mock, caplog):
