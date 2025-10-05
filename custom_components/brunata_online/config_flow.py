@@ -62,8 +62,8 @@ class BrunataOnlineFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     async def _test_credentials(self, username, password):
         """Return true if credentials is valid."""
         try:
-            session = async_create_clientsession(self.hass)
-            client = BrunataClient(username, password, session, "en")
+            #session = async_create_clientsession(self.hass)
+            #client = BrunataClient(username, password, session, "en")
             return True
         except Exception:  # pylint: disable=broad-except
             pass
