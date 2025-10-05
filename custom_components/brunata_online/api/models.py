@@ -40,9 +40,3 @@ class TimeSeries:
             total += v
 
         return total
-
-class BrunataClientConfiguration(NamedTuple):
-    username: str
-    password: str
-    session: ClientSession
-    locale: str

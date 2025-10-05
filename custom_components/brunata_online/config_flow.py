@@ -5,7 +5,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 import voluptuous as vol
 
-from . import BrunataClientConfiguration, BrunataClient
+from . import BrunataClient
 from .const import CONF_PASSWORD, CONF_USERNAME, DOMAIN, PLATFORMS
 
 
@@ -61,8 +61,7 @@ class BrunataOnlineFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         """Return true if credentials is valid."""
         try:
             session = async_create_clientsession(self.hass)
-            config = BrunataClientConfiguration(username, password, session, "en")
-            client = BrunataClient(config)
+            client = BrunataClient(username, password, session, "en")
             result = await client.get_meters()
             return result is not None
         except Exception:  # pylint: disable=broad-except

@@ -45,8 +45,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     password = entry.data.get(CONF_PASSWORD)
 
     session = async_get_clientsession(hass)
-    config = BrunataClientConfiguration(username, password, session, "en")
-    client = BrunataClient(config)
+    client = BrunataClient(username, password, session, "en")
     sensors = await client.get_meters()
 
     coordinator = BrunataOnlineDataUpdateCoordinator(hass, client=client, sensors_result=sensors)
@@ -91,10 +90,3 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)
-
-
-class BrunataClientConfiguration(NamedTuple):
-    username: str
-    password: str
-    session: ClientSession
-    locale: str

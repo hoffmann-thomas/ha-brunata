@@ -1,7 +1,8 @@
 import logging
 from datetime import datetime
 
-from custom_components.brunata_online import BrunataClientConfiguration
+from aiohttp import ClientSession
+
 from custom_components.brunata_online.api.brunata_api.api2 import BrunataApi
 from custom_components.brunata_online.api.brunata_api.meter_reader import MeterReader, ConsumptionReading, Meter
 from custom_components.brunata_online.api.const import Interval, Consumption
@@ -12,13 +13,16 @@ TIMEOUT = 10
 
 class BrunataClient:
 
-    def __init__(self, configuration: BrunataClientConfiguration) -> None:
-        self.api = BrunataApi(configuration.username, configuration.password, configuration.session)
-        self.configuration = configuration
+    def __init__(self, username: str,
+    password: str,
+    session: ClientSession,
+    locale: str) -> None:
+        self.api = BrunataApi(username, password, session)
         self.meter_reader = MeterReader()
+        self.locale = locale
 
     async def connect(self):
-        await self._update_metadata(self.configuration.locale)
+        await self._update_metadata(self.locale)
 
     async def _update_metadata(self, locale: str = "en"):
         mapping_config = await self.api.get_mapping_configuration(locale)
