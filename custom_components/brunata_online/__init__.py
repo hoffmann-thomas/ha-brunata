@@ -6,29 +6,41 @@ https://github.com/YukiElectronics/ha-brunata
 """
 
 import asyncio
-from datetime import timedelta
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Config, HomeAssistant
+from homeassistant.core import HomeAssistant
+from homeassistant.core_config import Config
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import BrunataOnlineApiClient
-from .const import CONF_PASSWORD, CONF_USERNAME, DOMAIN, PLATFORMS, STARTUP_MESSAGE
+from libs.brunata.brunata_api.api2 import BrunataApi
+from libs.brunata.brunata_api.client import BrunataClient
+from libs.brunata.brunata_api.models import BrunataClientConfiguration
+from .Coordinator import BrunataOnlineDataUpdateCoordinator
 
-SCAN_INTERVAL = timedelta(minutes=15)
+# from libs.brunata.api import BrunataOnlineApiClient
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
+from .const import (
+    CONF_PASSWORD,
+    CONF_USERNAME,
+    DOMAIN,
+    PLATFORMS,
+    SCAN_INTERVAL,
+    STARTUP_MESSAGE,
+)
 
-async def async_setup(hass: HomeAssistant, config: Config):
+
+
+async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up this integration using YAML is not supported."""
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up this integration using UI."""
     if hass.data.get(DOMAIN) is None:
         hass.data.setdefault(DOMAIN, {})
@@ -38,9 +50,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     password = entry.data.get(CONF_PASSWORD)
 
     session = async_get_clientsession(hass)
-    client = BrunataOnlineApiClient(username, password, session)
+    config = BrunataClientConfiguration(username, password, session, "en")
+    client = BrunataClient(config)
+    sensors = await client.get_meters()
 
-    coordinator = BrunataOnlineDataUpdateCoordinator(hass, client=client)
+    coordinator = BrunataOnlineDataUpdateCoordinator(hass, client=client, sensors_result=sensors)
     await coordinator.async_refresh()
 
     if not coordinator.last_update_success:
@@ -48,38 +62,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    for platform in PLATFORMS:
-        if entry.options.get(platform, True):
-            coordinator.platforms.append(platform)
-            hass.async_add_job(
-                hass.config_entries.async_forward_entry_setup(entry, platform)
-            )
+    # for platform in PLATFORMS:
+    #     if entry.options.get(platform, True):
+    #         coordinator.platforms.append(platform)
+    #         hass.async_add_job(
+    #             hass.config_entries.async_forward_entry_setup(entry, platform)
+    #         )
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     entry.add_update_listener(async_reload_entry)
     return True
-
-
-class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator):
-    """Class to manage fetching data from the API."""
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        client: BrunataOnlineApiClient,
-    ) -> None:
-        """Initialize."""
-        self.api = client
-        self.platforms = []
-
-        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=SCAN_INTERVAL)
-
-    async def _async_update_data(self):
-        """Update data via library."""
-        try:
-            return await self.api.async_get_data()
-        except Exception as exception:
-            raise UpdateFailed() from exception
-
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Handle removal of an entry."""

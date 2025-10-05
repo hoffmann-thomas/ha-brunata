@@ -1,4 +1,5 @@
 """Constants for Brunata Online."""
+from datetime import timedelta
 
 # Base component constants
 NAME = "Brunata Online"
@@ -29,6 +30,7 @@ CONF_PASSWORD = "password"
 # Defaults
 DEFAULT_NAME = DOMAIN
 
+SCAN_INTERVAL = timedelta(minutes=15)
 
 STARTUP_MESSAGE = f"""
 -------------------------------------------------------------------

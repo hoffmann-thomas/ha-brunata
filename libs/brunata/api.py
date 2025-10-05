@@ -1,5 +1,6 @@
 """Brunata Online API Client"""
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -7,10 +8,10 @@ import os
 import re
 import urllib.parse
 from datetime import datetime, timedelta
-
-import asyncio
 from socket import gaierror
-from aiohttp import ClientResponse, ClientSession, ClientError
+from typing import Any, Coroutine, NamedTuple
+
+from aiohttp import ClientError, ClientResponse, ClientSession
 from async_timeout import timeout as async_timeout
 from requests import Session
 
@@ -20,11 +21,12 @@ from .const import (
     CLIENT_ID,
     CONSUMPTION_URL,
     HEADERS,
+    METERS_URL,
     OAUTH2_PROFILE,
     OAUTH2_URL,
     REDIRECT,
     Consumption,
-    Interval, METERS_URL,
+    Interval,
 )
 
 logging.basicConfig(level=logging.DEBUG)
@@ -56,6 +58,9 @@ def end_of_interval(interval: Interval, offset: timedelta | None) -> str:
     return f"{date.isoformat()}.999Z"
 
 
+
+
+
 class BrunataOnlineApiClient:
     """Brunata Online API Client"""
 
@@ -63,6 +68,7 @@ class BrunataOnlineApiClient:
         self._username = username
         self._password = password
         self._session = session
+
         self._power = {}
         self._water = {}
         self._heating = {}
@@ -238,9 +244,9 @@ class BrunataOnlineApiClient:
             _LOGGER.error("Failed to get tokens")
         return bool(self._tokens)
 
-    async def _init_mappers(self, locale: str = "en") -> bool | None:
+    async def _init_mappers(self, locale: str = "en") -> bool:   #Step 1
         if not await self._get_tokens():
-            return
+            raise NotImplementedError
         result = await (
             await self.api_wrapper(
                 method="GET",
@@ -250,15 +256,24 @@ class BrunataOnlineApiClient:
                 },
             )
         ).json()
-        self._meter_types_map = { str(k): v for (k, v) in enumerate(result["mappers"]["meterType"]) }
-        self._meter_units_map = { str(k): v for (k, v) in enumerate(result["mappers"]["measurementUnit"]) }
-        self._allocation_unit_map = result["mappers"]["allocationUnitMap"]
 
+        meter_types = result["mappers"]["meterType"]
+        measurement_units = result["mappers"]["measurementUnit"]
+        allocationUnitMap = result["mappers"]["allocationUnitMap"]
+
+        if meter_types is None or measurement_units is None or allocationUnitMap is None:
+            print("Failed to retrieve mappers")
+            return False
+
+        self._meter_types_map = {str(k): v for (k, v) in enumerate(meter_types)}
+        self._meter_units_map = {str(k): v for (k, v) in enumerate(measurement_units)}
+        self._allocation_unit_map = allocationUnitMap
         return True
 
-    async def _fetch_meters(self) -> bool | None:
+
+    async def _fetch_meters(self) -> bool: #Step 2
         if not await self._get_tokens():
-            return
+            raise NotImplementedError
         if not await self._init_mappers():
             return
         date = datetime.now()
@@ -294,10 +309,13 @@ class BrunataOnlineApiClient:
                 _LOGGER.debug("New meter found: %s", meter)
             updated |= meter.add_reading(json_reading)
         return updated
+    #
+    # async def getMeterReadings(self):
+    #
 
     async def available_meters(self):
         if not await self._get_tokens():
-            return
+            raise NotImplementedError
         if not await self._fetch_meters():
             return
         return self._meters.values()
@@ -320,6 +338,7 @@ class BrunataOnlineApiClient:
                 },
             )
         ).json()
+        # "[{'superAllocationUnit': 1, 'allocationUnits': ['O']}, {'superAllocationUnit': 2, 'allocationUnits': ['W', 'K']}]"
         water_units = []
         heating_units = []
         power_units = []
@@ -345,6 +364,48 @@ class BrunataOnlineApiClient:
             _LOGGER.debug("⚡ Energy meter(s) found")
             self._power.update(init)
             self._power.update({"Units": power_units})
+
+    async def _get_consumption(self, _type: Consumption, unit: str, interval: Interval) -> None:
+        """Get consumption data for a specific meter type."""
+        if not await self._get_tokens():
+            raise NotImplementedError
+        consumption = await (
+                await self.api_wrapper(
+                    method="GET",
+                    url=f"{API_URL}/consumer/consumption",
+                    params={
+                        "startdate": start_of_interval(
+                            interval, offset=timedelta(seconds=0)
+                        ),
+                        "enddate": end_of_interval(
+                            interval, offset=timedelta(seconds=0)
+                        ),
+                        "interval": interval.value,
+                        "allocationunit": unit,
+                    },
+                    headers={
+                        "Referer": f"{CONSUMPTION_URL}/{_type.name.lower()}",
+                    },
+                )
+            ).json()
+        # Add all metrics that are not None
+        # usage["Meters"][interval.name.capitalize()].update(
+        #     {
+        #         meter.get("meter").get("meterId")
+        #         or index: {
+        #             "Name": meter.get("meter").get("placement") or index,
+        #             "Values": {
+        #                 entry.get("fromDate")[
+        #                     : 10 if interval is Interval.DAY else 7
+        #                 ]: entry.get("consumption")
+        #                 for entry in meter["consumptionValues"]
+        #                 if entry.get("consumption") is not None
+        #             },
+        #         }
+        #         for lines in consumption
+        #         for index, meter in enumerate(lines["consumptionLines"])
+        #     }
+        # )
 
     async def fetch_consumption(self, _type: Consumption, interval: Interval) -> None:
         """Get consumption data for a specific meter type."""
@@ -400,6 +461,7 @@ class BrunataOnlineApiClient:
                 for index, meter in enumerate(lines["consumptionLines"])
             }
         )
+        _LOGGER.debug("Consumption info: %s", str(usage))
 
     def get_consumption(self) -> dict:
         """Return consumption data."""
@@ -439,6 +501,7 @@ class BrunataOnlineApiClient:
             except Exception as exception:  # pylint: disable=broad-except
                 _LOGGER.error("Something really wrong happened! - %s", exception)
 
+
 class Reading:
     def __init__(self, meter, id: str | None, reading_value: float, reading_date: datetime):
         self._meter = meter
@@ -449,10 +512,12 @@ class Reading:
     def __str__(self):
         return f"{self.value}{self._meter.meter_unit} @{self.date}"
 
+
 class Meter:
     """
     Representing a single meter
     """
+
     def __init__(self, api: BrunataOnlineApiClient, json_meter: dict[str, str]):
         self._api = api
 
