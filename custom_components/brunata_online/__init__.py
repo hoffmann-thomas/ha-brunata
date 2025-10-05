@@ -13,14 +13,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.core_config import Config
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from libs.brunata.brunata_api.api2 import BrunataApi
-from libs.brunata.brunata_api.client import BrunataClient
-from libs.brunata.brunata_api.models import BrunataClientConfiguration
+from custom_components.brunata_online.api.brunata_api.client import BrunataClient
+from custom_components.brunata_online.api.brunata_api.models import BrunataClientConfiguration
 from .Coordinator import BrunataOnlineDataUpdateCoordinator
-
-# from libs.brunata.api import BrunataOnlineApiClient
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
@@ -32,8 +28,6 @@ from .const import (
     SCAN_INTERVAL,
     STARTUP_MESSAGE,
 )
-
-
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up this integration using YAML is not supported."""
