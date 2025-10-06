@@ -1,22 +1,19 @@
 import asyncio
 import base64
 import hashlib
-import json
 import logging
 import os
 import re
 import urllib.parse
-from datetime import datetime, timedelta
 from socket import gaierror
-from typing import Any, Coroutine, NamedTuple
 
-from aiohttp import ClientError, ClientResponse, ClientSession
+from aiohttp import ClientError, ClientResponse
 from async_timeout import timeout as async_timeout
 from requests import Session
 
+from .models import *
 from .utils import from_response
 from ..Result import Result
-from .models import *
 
 logging.basicConfig(level=logging.DEBUG)
 _LOGGER: logging.Logger = logging.getLogger(__package__)
@@ -76,7 +73,7 @@ class BrunataApi:
                     "grant_type": "refresh_token",
                     "refresh_token": self._tokens.get("refresh_token"),
                     "CLIENT_ID": CLIENT_ID,
-                },
+                }
             )
         except Exception as error:  # pylint: disable=broad-except
             _LOGGER.error("An error occurred while trying to renew tokens: %s", error)
@@ -213,6 +210,7 @@ class BrunataApi:
 
     async def _api_wrapper(self, **args) -> Result[ClientResponse]:
         """Get information from the API."""
+        args["headers"] = HEADERS
         async with async_timeout(TIMEOUT):
             try:
                 async with self._session.request(**args) as response:

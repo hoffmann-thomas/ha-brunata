@@ -60,7 +60,7 @@ class BrunataClient:
         return result.value
 
     async def _get_configuration(self):
-        result = await self.api.get_mapping_configuration(self.configuration.locale)
+        result = await self.api.get_mapping_configuration("en")
         return result.value
 
     async def _get_meters(self):
@@ -68,7 +68,7 @@ class BrunataClient:
         return result.value
 
     async def get_meters(self) -> list[Meter]:
-        if self.meter_reader.is_configured() is False:
+        if not self.meter_reader.is_configured():
             await self.connect()
         result = self.meter_reader.get_meters()
         return result
