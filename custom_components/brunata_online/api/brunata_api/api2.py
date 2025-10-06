@@ -40,7 +40,6 @@ class BrunataApi:
         self._username = username
         self._password = password
         self._session = session
-        self._session.headers.update(HEADERS)
         self._tokens = {}
 
     def _is_token_valid(self, token: str) -> bool:
