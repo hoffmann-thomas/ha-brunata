@@ -16,8 +16,9 @@ class BrunataClient:
     def __init__(self, username: str,
     password: str,
     session: ClientSession,
-    locale: str) -> None:
-        self.api = BrunataApi(username, password, session)
+    locale: str,
+                 use_old_auth = False) -> None:
+        self.api = BrunataApi(username, password, session, use_old_auth)
         self.meter_reader = MeterReader()
         self.locale = locale
 

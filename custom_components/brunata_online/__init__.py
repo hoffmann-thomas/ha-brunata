@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import NamedTuple
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, CookieJar
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.core_config import Config
@@ -44,7 +44,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     username = entry.data.get(CONF_USERNAME)
     password = entry.data.get(CONF_PASSWORD)
 
-    session = async_get_clientsession(hass)
+    session = async_get_clientsession(hass, cookie_jar=CookieJar(unsafe=True, quote_cookie=False))
     client = BrunataClient(username, password, session, "en")
     sensors = await client.get_meters()
 

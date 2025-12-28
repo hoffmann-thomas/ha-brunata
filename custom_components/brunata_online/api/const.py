@@ -6,6 +6,7 @@ from enum import Enum
 BASE_URL = "https://online.brunata.com"
 OAUTH2_PROFILE = "B2C_1_signin_username"
 AUTHN_URL = f"https://brunatab2cprod.b2clogin.com/brunatab2cprod.onmicrosoft.com/{OAUTH2_PROFILE}"
+AUTH_FULL_URL = "https://brunatab2cprod.b2clogin.com/brunatab2cprod.onmicrosoft.com/B2C_1_signin_username"
 API_URL = f"{BASE_URL}/online-webservice/v1/rest"
 
 OAUTH2_URL = f"{AUTHN_URL}/oauth2/v2.0"
