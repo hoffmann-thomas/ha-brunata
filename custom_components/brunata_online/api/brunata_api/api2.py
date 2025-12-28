@@ -78,6 +78,14 @@ class BrunataApi:
             return {}
         return await tokens.value.json()
 
+    async def _calculate_code_challenge(self, code_verifier: str) -> str:
+        def _hash():
+            challenge = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+            return base64.urlsafe_b64encode(challenge).decode("utf-8").replace("=", "")
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _hash, None)
+
     async def _b2c_auth(self) -> dict:
         headers = {
             "User-Agent": "ha-brunata/0.0.1",
@@ -90,10 +98,7 @@ class BrunataApi:
         # Initialize challenge values
         code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(40)).decode("utf-8")
         code_verifier = re.sub("[^a-zA-Z0-9]+", "", code_verifier)
-        code_challenge = hashlib.sha256(code_verifier.encode("utf-8")).digest()
-        code_challenge = (
-            base64.urlsafe_b64encode(code_challenge).decode("utf-8").replace("=", "")
-        )
+        code_challenge = await self._calculate_code_challenge(code_verifier)
         url = f"{API_URL.replace('webservice', 'auth-webservice')}/authorize"
 
         req_code = await self._session.get(
