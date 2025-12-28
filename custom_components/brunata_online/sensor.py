@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import Throttle
 
 from . import BrunataOnlineDataUpdateCoordinator
-from .api.api import Meter
+from .api.brunata_api.meter_reader import Meter
 from .api.const import Consumption
 from .api.models import TimeSeries
 from .const import DEFAULT_NAME, DOMAIN, ICON, SCAN_INTERVAL, SENSOR
@@ -248,7 +248,8 @@ class BrunataWaterStatistics(BrunataOnlineEntity):
 
     sensor: BrunataOnlineWaterSensor
 
-    def __init__(self, water_sensor: BrunataOnlineWaterSensor):
+    def __init__(self, water_sensor: BrunataOnlineWaterSensor, coordinator, config_entry):
+        super().__init__(coordinator, config_entry)
         self._attr_unique_id = f"{water_sensor.name}-statistic"
         self.sensor = water_sensor
 
