@@ -3,7 +3,6 @@ from typing import Type, TypeVar
 
 from aiohttp import ClientResponse
 from pydantic import BaseModel
-from requests.sessions import PreparedRequest
 from yarl import URL
 
 T = TypeVar("T", bound=BaseModel)
@@ -13,21 +12,7 @@ async def from_response(response: ClientResponse, model: Type[T], strict = True)
     data = await response.json()
     return model.model_validate(data, strict=strict)
 
-def pretty_print_POST(req: PreparedRequest):
-    """
-    At this point it is completely built and ready
-    to be fired; it is "prepared".
 
-    However pay attention at the formatting used in
-    this function because it is programmed to be pretty
-    printed and may differ from the actual request.
-    """
-    return '{}\n{}\r\n{}\r\n\r\n{}'.format(
-        '-----------START-----------',
-        req.method + ' ' + req.url,
-        '\r\n'.join('{}: {}'.format(k, v) for k, v in req.headers.items()),
-        req.body,
-    )
 
 def pretty_print_aiohttp_request(method: str, url: str, **kwargs) -> str:
     """

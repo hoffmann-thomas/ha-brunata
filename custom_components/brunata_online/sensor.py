@@ -333,7 +333,7 @@ class BrunataWaterStatistics(BrunataOnlineEntity):
         if len(statistics) > 0:
             async_import_statistics(self.hass, metadata, statistics)
 
-    async def _get_last_stat(self, hass: HomeAssistant) -> StatisticData:
+    async def _get_last_stat(self, hass: HomeAssistant) -> StatisticsRow | None:
         last_stats = await get_instance(hass).async_add_executor_job(
             get_last_statistics, hass, 1, self.entity_id, True, {"sum"}
         )
