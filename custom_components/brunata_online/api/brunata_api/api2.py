@@ -2,10 +2,10 @@ import asyncio
 import base64
 import hashlib
 import logging
-import os
 import re
 import secrets
 import urllib.parse
+from http.cookies import BaseCookie
 from socket import gaierror
 
 from aiohttp import ClientError, ClientResponse
@@ -13,7 +13,7 @@ from async_timeout import timeout as async_timeout
 
 from .models import *
 from .utils import from_response
-from ..Result import Result
+from ..result import Result
 
 logging.basicConfig(level=logging.DEBUG)
 _LOGGER: logging.Logger = logging.getLogger(__package__)
@@ -87,6 +87,7 @@ class BrunataApi:
         return await loop.run_in_executor(None, _hash, None)
 
     async def _b2c_auth(self) -> dict:
+        loop = asyncio.get_running_loop()
         headers = {
             "User-Agent": "ha-brunata/0.0.1",
             "Accept": "*/*",
@@ -99,20 +100,7 @@ class BrunataApi:
         code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(40)).decode("utf-8")
         code_verifier = re.sub("[^a-zA-Z0-9]+", "", code_verifier)
         code_challenge = await self._calculate_code_challenge(code_verifier)
-        url = f"{API_URL.replace('webservice', 'auth-webservice')}/authorize"
-
-        req_code = await self._session.get(
-            url=url,
-            params={
-                "client_id": CLIENT_ID,
-                "redirect_uri": REDIRECT,#urllib.parse.quote_plus(REDIRECT),
-                "scope": f"{CLIENT_ID} offline_access",
-                "response_type": "code",
-                "code_challenge": code_challenge,
-                "code_challenge_method": "S256",
-            },
-            headers=headers,
-        )
+        req_code = await self._callAuthorize(code_challenge)
         if not req_code.ok:
             _LOGGER.error("Req Code failed")
         # Get CSRF Token & Transaction ID
@@ -133,54 +121,18 @@ class BrunataApi:
             return {}
         # Post credentials to B2C Endpoint
         cookies = self._session.cookie_jar.filter_cookies("https://brunatab2cprod.b2clogin.com")
-        cookie_header = "; ".join([f"{k}={v.value.replace("\"", "")}" for k, v in cookies.items()])
-        for k, v in cookies.items():
-            _LOGGER.info(f"Will send cookie: {k}={v.value[:40]}...")
+        # cookie_header = "; ".join([f"{k}={v.value.replace("\"", "")}" for k, v in cookies.items()])
+        # for k, v in cookies.items():
+        #     _LOGGER.info(f"Will send cookie: {k}={v.value[:40]}...")
+        #
+        # _LOGGER.info(cookie_header)
 
-        _LOGGER.info(cookie_header)
-
-        req_auth = await self._session.post(
-            url=f"{AUTHN_URL}/SelfAsserted",
-            params={
-                "tx": transaction_id,
-                "p": OAUTH2_PROFILE,
-            },
-            data={
-                "request_type": "RESPONSE",
-                "logonIdentifier": self._username,
-                "password": self._password,
-            },
-            headers={
-                "Referer": str(req_code.url).replace("redirect_uri=https://online.brunata.com/auth-response", "redirect_uri=https%3A%2F%2Fonline.brunata.com%2Fauth-response"),
-                # "Referer": urllib.parse.quote_plus(str(req_code.url).replace("+offline_access", " offline_access")),#.replace("redirect_uri=https://online.brunata.com/auth-response", "redirect_uri=https%3A%2F%2Fonline.brunata.com%2Fauth-response"),#.replace("+offline_access", " offline_access"),
-                "X-Csrf-Token": csrf_token,
-                "X-Requested-With": "XMLHttpRequest",
-                "Connection": "keep-alive",
-            },
-            allow_redirects=False,
-            cookies=cookies,
-        )
+        req_auth = await self._call_selfAsserted(cookies, csrf_token, req_code, transaction_id)
         cookies = self._session.cookie_jar.filter_cookies("https://brunatab2cprod.b2clogin.com")
         assert req_auth.status == 200
-        for k, v in cookies.items():
-            _LOGGER.info(f"Will send cookie: {k}={v.value[:40]}...")
         cookies_parsed = {k: v.value for k, v in cookies.items()}
-        _LOGGER.debug("req_auth headers: %s", req_auth.request_info.headers)
-        _LOGGER.debug("req_auth status: %s", req_auth.status)
-        _LOGGER.debug("req_auth text: %s", await req_auth.text())
         # Get authentication code
-        req_auth = await self._session.get(
-            url=f"{AUTHN_URL}/api/CombinedSigninAndSignup/confirmed",
-            params={
-                "rememberMe": str(False),
-                "csrf_token": csrf_token,
-                "tx": transaction_id,
-                "p": OAUTH2_PROFILE,
-            },
-            allow_redirects=False,
-            headers={},
-            cookies=cookies_parsed,
-        )
+        req_auth = await self._call_signin(cookies_parsed, csrf_token, transaction_id)
         if not req_auth.ok:
             _LOGGER.error("Second Req Auth failed")
         redirect = req_auth.headers["Location"]
@@ -197,7 +149,11 @@ class BrunataApi:
             )
             return {}
         # Get OAuth 2.0 token object
-        tokens = await self._session.request(
+        tokens = await self.call_token(auth_code, code_verifier)
+        return await tokens.json()
+
+    async def call_token(self, auth_code: str, code_verifier: str) -> ClientResponse:
+        return await self._session.request(
             method="POST",
             url=f"{OAUTH2_URL}/token",
             data={
@@ -208,7 +164,60 @@ class BrunataApi:
                 "code_verifier": code_verifier,
             },
         )
-        return await tokens.json()
+
+    async def _call_signin(self, cookies_parsed: dict[str, str], csrf_token: str, transaction_id) -> ClientResponse:
+        return await self._session.get(
+            url=f"{AUTHN_URL}/api/CombinedSigninAndSignup/confirmed",
+            params={
+                "rememberMe": str(False),
+                "csrf_token": csrf_token,
+                "tx": transaction_id,
+                "p": OAUTH2_PROFILE,
+            },
+            allow_redirects=False,
+            headers={},
+            cookies=cookies_parsed,
+        )
+
+    async def _call_selfAsserted(self, cookies: BaseCookie[str], csrf_token: str, req_code: ClientResponse,
+                                 transaction_id) -> ClientResponse:
+        return await self._session.post(
+            url=f"{AUTHN_URL}/SelfAsserted",
+            params={
+                "tx": transaction_id,
+                "p": OAUTH2_PROFILE,
+            },
+            data={
+                "request_type": "RESPONSE",
+                "logonIdentifier": self._username,
+                "password": self._password,
+            },
+            headers={
+                "Referer": str(req_code.url).replace("redirect_uri=https://online.brunata.com/auth-response",
+                                                     "redirect_uri=https%3A%2F%2Fonline.brunata.com%2Fauth-response"),
+                "X-Csrf-Token": csrf_token,
+                "X-Requested-With": "XMLHttpRequest",
+                "Connection": "keep-alive",
+            },
+            allow_redirects=False,
+            cookies=cookies,
+        )
+
+    async def _callAuthorize(self, code_challenge: str) -> ClientResponse:
+        url = f"{API_URL.replace('webservice', 'auth-webservice')}/authorize"
+        req_code = await self._session.get(
+            url=url,
+            params={
+                "client_id": CLIENT_ID,
+                "redirect_uri": REDIRECT,
+                "scope": f"{CLIENT_ID} offline_access",
+                "response_type": "code",
+                "code_challenge": code_challenge,
+                "code_challenge_method": "S256",
+            },
+            headers=HEADERS,
+        )
+        return req_code
 
     async def _get_tokens(self) -> bool:
         """
