@@ -87,7 +87,6 @@ class BrunataApi:
         return await loop.run_in_executor(None, _hash, None)
 
     async def _b2c_auth(self) -> dict:
-        loop = asyncio.get_running_loop()
         headers = {
             "User-Agent": "ha-brunata/0.0.1",
             "Accept": "*/*",
@@ -100,7 +99,7 @@ class BrunataApi:
         code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(40)).decode("utf-8")
         code_verifier = re.sub("[^a-zA-Z0-9]+", "", code_verifier)
         code_challenge = await self._calculate_code_challenge(code_verifier)
-        req_code = await self._callAuthorize(code_challenge)
+        req_code = await self._call_authorize(code_challenge)
         if not req_code.ok:
             _LOGGER.error("Req Code failed")
         # Get CSRF Token & Transaction ID
@@ -203,7 +202,11 @@ class BrunataApi:
             cookies=cookies,
         )
 
-    async def _callAuthorize(self, code_challenge: str) -> ClientResponse:
+    async def _call_authorize(self, code_challenge: str) -> ClientResponse:
+        import sys
+        print(f"[BRUNATA DEBUG] Session type: {type(self._session)}", file=sys.stderr, flush=True)
+        print(f"[BRUNATA DEBUG] Session module: {self._session.__class__.__module__}", file=sys.stderr, flush=True)
+
         url = f"{API_URL.replace('webservice', 'auth-webservice')}/authorize"
         req_code = await self._session.get(
             url=url,
