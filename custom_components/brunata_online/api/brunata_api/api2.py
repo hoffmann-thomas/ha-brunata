@@ -6,9 +6,10 @@ import re
 import secrets
 import urllib.parse
 from asyncio import timeout as async_timeout
+from datetime import datetime  # noqa: F401 — was previously imported via wildcard from models
 from socket import gaierror
 
-from aiohttp import ClientError, ClientResponse
+from aiohttp import ClientError, ClientResponse, ClientSession
 
 from .models import (
     AllocationUnitResult,

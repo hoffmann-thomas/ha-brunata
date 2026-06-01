@@ -16,6 +16,7 @@ class _Stub:
     """Returns itself for any attribute, call, or subclass operation."""
     def __getattr__(self, _): return _Stub()
     def __call__(self, *a, **kw): return _Stub()
+    def __getitem__(self, _): return _Stub()
     def __mro_entries__(self, bases): return (object,)
     def __init_subclass__(cls, **kw): pass
     def __class_getitem__(cls, _): return cls
