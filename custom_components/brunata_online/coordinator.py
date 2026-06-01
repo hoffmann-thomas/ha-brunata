@@ -13,6 +13,12 @@ from custom_components.brunata_online.api.const import Interval, Consumption
 from .const import DOMAIN, SCAN_INTERVAL
 from .models import MeterDataSet
 
+# Fetch history from this fixed epoch on first run.
+# Brunata Online launched digital metering around 2015; starting earlier
+# than a customer's move-in date is fine — the API returns null consumption
+# for periods before the meter was registered, which we skip.
+_HISTORY_EPOCH = datetime(2015, 1, 1, tzinfo=timezone.utc)
+
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
 # The Brunata v2 API returns at most ~31 days per request.
@@ -47,9 +53,7 @@ class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator[MeterDataSet]):
         """Fetch consumption data in 30-day chunks to stay within the API limit."""
         try:
             end = datetime.now(tz=timezone.utc)
-            start = self._last_data_end if self._last_data_end is not None else (
-                end - timedelta(days=365)
-            )
+            start = self._last_data_end if self._last_data_end is not None else _HISTORY_EPOCH
 
             merged = self.data or MeterDataSet()
 
