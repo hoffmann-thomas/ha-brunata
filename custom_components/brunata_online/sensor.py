@@ -105,7 +105,7 @@ class BrunataStatisticsSensor(
         self._meter = meter
         self._entry = entry
         self._attr_unique_id = f"{meter.meter_id}-statistics"
-        self._attr_name = f"Brunata {meter.value_category} - {meter.placement}"
+        self._attr_name = f"{meter.value_category} - {meter.placement}"
         self._attr_device_info = brunata_device_info(entry.entry_id)
 
         device_class, native_unit = _resolve_unit(meter)
