@@ -2,17 +2,22 @@
 
 from enum import Enum
 
-# API Constants
+# API base
 BASE_URL = "https://online.brunata.com"
-OAUTH2_PROFILE = "B2C_1_signin_username"
-AUTHN_URL = f"https://brunatab2cprod.b2clogin.com/brunatab2cprod.onmicrosoft.com/{OAUTH2_PROFILE}"
-AUTH_FULL_URL = "https://brunatab2cprod.b2clogin.com/brunatab2cprod.onmicrosoft.com/B2C_1_signin_username"
-API_URL = f"{BASE_URL}/online-webservice/v1/rest"
+API_URL = f"{BASE_URL}/online-webservice/v2/rest"
 
-OAUTH2_URL = f"{AUTHN_URL}/oauth2/v2.0"
-CLIENT_ID = "e1d10965-78dc-4051-a1e5-251483e74d03"
-REDIRECT = f"{BASE_URL}/auth-response"
+# Keycloak OIDC endpoints (migrated from Azure AD B2C)
+CLIENT_ID = "82770188-c92e-4d16-927d-a15c472eda55"
+REDIRECT = f"{BASE_URL}/auth-redirect"
+KEYCLOAK_BASE = f"{BASE_URL}/iam/realms/online-prod/protocol/openid-connect"
+KEYCLOAK_AUTH_URL = f"{KEYCLOAK_BASE}/auth"
 
+# Token exchange goes through the Brunata proxy, not directly to Keycloak.
+# The proxy issues tokens accepted by the consumer API.
+OAUTH_PROXY_BASE = f"{BASE_URL}/online-auth-webservice/v1/rest"
+KEYCLOAK_TOKEN_URL = f"{OAUTH_PROXY_BASE}/oauth/token"
+
+# Brunata app page URLs (used as Referer headers)
 CONSUMPTION_URL = f"{BASE_URL}/consumption-overview"
 METERS_URL = f"{BASE_URL}/react-online/meters-values"
 

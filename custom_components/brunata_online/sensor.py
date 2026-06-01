@@ -1,344 +1,156 @@
 """Sensor platform for Brunata Online."""
 import logging
-from datetime import datetime, timedelta, UTC
-from zoneinfo import ZoneInfo
+from datetime import datetime, UTC
 
-import pytz
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.statistics import (
-    DOMAIN as RECORDER_DOMAIN, StatisticsRow,
-)
-from homeassistant.components.recorder.statistics import (
+    DOMAIN as RECORDER_DOMAIN,
+    StatisticMeanType,
     async_import_statistics,
     get_last_statistics,
 )
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass, SensorEntity
 from homeassistant.const import UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant
-from homeassistant.util import Throttle
 
-from . import BrunataOnlineDataUpdateCoordinator
+from .coordinator import BrunataOnlineDataUpdateCoordinator
 from .api.brunata_api.meter_reader import Meter
 from .api.const import Consumption
-from .api.models import TimeSeries
-from .const import DEFAULT_NAME, DOMAIN, ICON, SCAN_INTERVAL, SENSOR
-from .entity import BrunataOnlineEntity
+from .const import DOMAIN
 from .models import MeterDataSet
 
 _LOGGER = logging.getLogger(__name__)
 
+# Map from Brunata API unit strings to (HA device class, HA native unit).
+# Brunata "units" (varmeenheder) are a proprietary radiator allocation unit
+# with no direct energy equivalent — they are stored as-is.
+_API_UNIT_MAP: dict[str, tuple[SensorDeviceClass, str]] = {
+    "m³":  (SensorDeviceClass.WATER,  UnitOfVolume.CUBIC_METERS),
+    "m3":  (SensorDeviceClass.WATER,  UnitOfVolume.CUBIC_METERS),
+    "GJ":  (SensorDeviceClass.ENERGY, UnitOfEnergy.GIGA_JOULE),
+    "MJ":  (SensorDeviceClass.ENERGY, UnitOfEnergy.MEGA_JOULE),
+    "kWh": (SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR),
+    "KWh": (SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR),
+    "Wh":  (SensorDeviceClass.ENERGY, UnitOfEnergy.WATT_HOUR),
+    "MWh": (SensorDeviceClass.ENERGY, UnitOfEnergy.MEGA_WATT_HOUR),
+}
+
+
+def _resolve_unit(meter: Meter) -> tuple[SensorDeviceClass | None, str]:
+    """Return (device_class, native_unit) for a meter based on its API unit string."""
+    api_unit = (meter.unit or "").strip()
+    if api_unit in _API_UNIT_MAP:
+        return _API_UNIT_MAP[api_unit]
+    # Unknown unit (e.g. Brunata's proprietary radiator "units") — keep the
+    # raw string so the value is displayed correctly even if the energy
+    # dashboard cannot aggregate it as energy.
+    _LOGGER.debug("Meter %s has unrecognised unit %r; storing as-is", meter.meter_id, api_unit)
+    return None, api_unit
+
 
 async def async_setup_entry(hass, entry, async_add_devices):
     """Setup sensor platform."""
-    coordinator: BrunataOnlineDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: BrunataOnlineDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
     sensors = []
-
     for s in coordinator.sensors:
-        match s.meter_type_code:
-            case Consumption.WATER:
-                e = BrunataWaterStatisticsSensor(coordinator, entry, s)
-            case Consumption.HEATING:
-                e = BrunataHeatingStatisticsSensor(coordinator, entry, s)
-            case Consumption.ELECTRICITY:
-                e = BrunataEnergyStatisticsSensor(coordinator, entry, s)
-        sensors.append(e)
+        try:
+            Consumption(s.meter_type_code)
+        except ValueError:
+            _LOGGER.warning("Unknown meter type code %s for meter %s, skipping", s.meter_type_code, s.meter_id)
+            continue
+        sensors.append(BrunataStatisticsSensor(coordinator, entry, s))
 
     async_add_devices(sensors)
 
-class ConsumptionSensor(SensorEntity):
-    """Representation of a consumption sensor."""
-    def __init__(self, coordinator, entry, meter: Meter):
-        pass
 
-class StatisticsSensor(SensorEntity):
-    _attr_state_class = SensorStateClass.MEASUREMENT
+class BrunataStatisticsSensor(SensorEntity):
+    """Statistics sensor for a single Brunata meter.
+
+    Device class and unit are resolved at runtime from the meter's API-reported
+    unit string, so the sensor works correctly for water (m³), electricity (kWh),
+    district heating (GJ/MWh) and Brunata's proprietary radiator units alike.
+    """
+
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_should_poll = True
 
     def __init__(self, coordinator: BrunataOnlineDataUpdateCoordinator, entry, meter: Meter):
         self.coordinator = coordinator
+        self._meter = meter
+        self._attr_unique_id = f"{meter.meter_id}-statistics"
+        self._attr_name = f"Brunata {meter.value_category} - {meter.placement}"
+
+        device_class, native_unit = _resolve_unit(meter)
+        self._attr_device_class = device_class
+        self._attr_native_unit_of_measurement = native_unit
+
+    @property
+    def native_value(self):
+        data: MeterDataSet = self.coordinator.data
+        return data.get_latest_value(str(self._meter.meter_id))
+
+    async def async_added_to_hass(self) -> None:
+        """Clear any corrupted statistics on startup so they get re-imported cleanly."""
+        await get_instance(self.hass).async_clear_statistics([self.entity_id])
 
     async def async_will_remove_from_hass(self) -> None:
-        """Cleanup callback to remove statistics when deleting entity"""
         await get_instance(self.hass).async_clear_statistics([self.entity_id])
 
     async def async_update(self):
         last_stat = await self._get_last_stat(self.hass)
         self.hass.async_create_task(self._update_data(last_stat))
+        self.async_write_ha_state()
 
-    async def _update_data(self, last_stat: StatisticData | None):
+    async def _update_data(self, last_stat):
         data: MeterDataSet = self.coordinator.data
-        data_cutoff = pytz.utc.localize(datetime.fromtimestamp(last_stat["start"], UTC))
-        meter = data.get_meter(self.entity_id)
-        if meter is None: return
-        #new_data = {(time, value) for time, value in meter.values if time > data_cutoff}
-        new_data = {k: v for k, v in meter.values.items() if k > data_cutoff}
-        if new_data is not None:
-            await self._insert_statistics(new_data, last_stat)
-
-
-    async def _get_last_stat(self, hass: HomeAssistant) -> StatisticsRow | None:
-        last_stats = await get_instance(hass).async_add_executor_job(
-            get_last_statistics, hass, 1, self.entity_id, True, {"sum"}
-        )
-
-        if self.entity_id in last_stats and len(last_stats[self.entity_id]) > 0:
-            return last_stats[self.entity_id][0]
-        else:
-            return None
-
-    async def _insert_statistics(self, new_data: dict[datetime, float], last_stat: StatisticData | None):
-        statistics: list[StatisticData] = []
-        if last_stat is not None:
-            total = last_stat["sum"]
-        else:
-            total = 0
-
-        sorted_data = sorted(new_data)
-        for (time, value) in sorted_data:
-            total += value
-            statistics.append(
-                StatisticData(
-                    start=time,
-                    sum=total
-                )
-            )
-
-        metadata = StatisticMetaData(
-            name=self._attr_name,
-            source=RECORDER_DOMAIN,
-            statistic_id=self.entity_id,
-            unit_of_measurement=self.unit_of_measurement,
-            has_mean=False,
-            has_sum=True
-        )
-        if len(statistics) > 0:
-            async_import_statistics(self.hass, metadata, statistics)
-
-
-class WaterSensor(SensorEntity):
-    _attr_device_class = SensorDeviceClass.WATER
-    _attr_unit_of_measurement = UnitOfVolume.CUBIC_METERS
-    pass
-
-class EnergySensor(SensorEntity):
-    _attr_device_class = SensorDeviceClass.ENERGY
-    pass
-
-class HeatingSensor(SensorEntity):
-    _attr_device_class = SensorDeviceClass.GAS
-    pass
-
-class BrunataWaterStatisticsSensor(WaterSensor, StatisticsSensor):
-    def __init__(self, coordinator, entry, meter: Meter):
-        super().__init__(coordinator, entry)
-        self.attr_name = f"Brunata {meter.value_category} - {meter.placement}"
-        self._attr_unique_id = f"{meter.meter_id}-statistics"
-        self._meter = meter
-
-class BrunataEnergyStatisticsSensor(EnergySensor, StatisticsSensor):
-    def __init__(self, coordinator, entry, meter: Meter):
-        super().__init__(coordinator, entry)
-        self.attr_name = f"Brunata {meter.value_category} - {meter.placement}"
-        self._attr_unique_id = f"{meter.meter_id}-statistics"
-        self._meter = meter
-
-class BrunataHeatingStatisticsSensor(HeatingSensor, StatisticsSensor):
-    def __init__(self, coordinator, entry, meter: Meter):
-        super().__init__(coordinator, entry)
-        self.attr_name = f"Brunata {meter.value_category} - {meter.placement}"
-        self._attr_unique_id = f"{meter.meter_id}-statistics"
-        self._meter = meter
-
-class BrunataOnlineEnergySensor(BrunataOnlineEntity):
-    """Energy Sensor"""
-
-    _attr_name = "Brunata Energy Consumed"
-    _attr_native_unit_of_measurement = UnitOfEnergy
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{DEFAULT_NAME}_{SENSOR}"
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self.coordinator.data.get("body")
-
-    @property
-    def icon(self):
-        """Return the icon of the sensor."""
-        return ICON
-
-    @property
-    def device_class(self):
-        """Return the device class of the sensor."""
-        return "brunata_online__custom_device_class"
-
-
-class BrunataOnlineWaterSensor(BrunataOnlineEntity):
-    """brunata_online Sensor class."""
-
-    _attr_name = "Brunata Water Consumed"
-    _attr_native_unit_of_measurement = UnitOfVolume
-    _attr_device_class = SensorDeviceClass.VOLUME
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{DEFAULT_NAME}_{SENSOR}"
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self.coordinator.data.get("body")
-
-    @property
-    def icon(self):
-        """Return the icon of the sensor."""
-        return ICON
-
-    @property
-    def device_class(self):
-        """Return the device class of the sensor."""
-        return "brunata_online__custom_device_class"
-
-
-class BrunataOnlineHeatingSensor(BrunataOnlineEntity):
-    """brunata_online Sensor class."""
-
-    _attr_name = "Brunata Energy Consumed"
-    _attr_native_unit_of_measurement = UnitOfEnergy
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{DEFAULT_NAME}_{SENSOR}"
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self.coordinator.data.get("body")
-
-    @property
-    def icon(self):
-        """Return the icon of the sensor."""
-        return ICON
-
-    @property
-    def device_class(self):
-        """Return the device class of the sensor."""
-        return "brunata_online__custom_device_class"
-
-
-class BrunataWaterStatistics(BrunataOnlineEntity):
-    """This class handles the total energy of the meter,
-    and imports it as long term statistics from Brunata Online."""
-
-    _attr_name = "Brunata Energy Consumed"
-    _attr_native_unit_of_measurement = UnitOfEnergy
-    _attr_device_class = SensorDeviceClass.VOLUME
-    _attr_state_class = SensorStateClass.TOTAL
-
-    sensor: BrunataOnlineWaterSensor
-
-    def __init__(self, water_sensor: BrunataOnlineWaterSensor, coordinator, config_entry):
-        super().__init__(coordinator, config_entry)
-        self._attr_unique_id = f"{water_sensor.name}-statistic"
-        self.sensor = water_sensor
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Cleanup callback to remove statistics when deleting entity"""
-        await get_instance(self.hass).async_clear_statistics([self.entity_id])
-
-    @Throttle(SCAN_INTERVAL)
-    async def async_update(self):
-        """Continually update history"""
-        last_stat = await self._get_last_stat(self.hass)  # Last time we have data for
-
-        if last_stat is not None and pytz.utc.localize(datetime.now()) - pytz.utc.localize(datetime.fromtimestamp(last_stat["start"], datetime.timezone.utc)) < timedelta(days=1):
-            # If less than 1 day since last record, don't pull new data.
-            # Data is available at the earliest a day after.
+        meter = data.get_meter(str(self._meter.meter_id))
+        if meter is None:
+            _LOGGER.debug("No coordinator data yet for meter %s", self._meter.meter_id)
             return
 
-        # Create a job to fetch new data
-
-        self.hass.async_create_task(self._update_data(last_stat))
-
-    async def _update_data(self, last_stat: StatisticData):
-        if last_stat is None:
-            # if none import from last january
-            from_date = datetime(datetime.today().year - 1, 1, 1)
-        else:
-            # Next day at noon (eloverblik.py will strip time)
-            from_date = ZoneInfo.fromutc(datetime.fromtimestamp(last_stat["start"]))
-
-        data = await self.hass.async_add_executor_job(
-            self.sensor.async_update
+        # Only insert completed days. Today's partial value fluctuates and, when
+        # inserted with a lower cumulative than the previous day's final entry,
+        # causes the energy dashboard to show negative usage.
+        today_midnight_utc = datetime.now(tz=UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0
         )
 
-        if data is not None:
-            await self._insert_statistics(data, last_stat)
-        else:
-            _LOGGER.debug("None data was returned from Eloverblik")
-
-    async def _insert_statistics(
-            self,
-            data: dict[datetime, TimeSeries],
-            last_stat: StatisticData):
-
-        statistics : list[StatisticData] = []
-
         if last_stat is not None:
-            total = last_stat["sum"]
+            data_cutoff = datetime.fromtimestamp(last_stat["start"], tz=UTC)
+            new_data = {k: v for k, v in meter.values.items()
+                        if k > data_cutoff and k < today_midnight_utc}
         else:
-            total = 0
+            new_data = {k: v for k, v in meter.values.items() if k < today_midnight_utc}
 
-        # Sort time series to ensure correct insertion
-        sorted_time_series = sorted(data.values(), key=lambda timeseries : timeseries.data_date)
+        if new_data:
+            await self._insert_statistics(new_data, last_stat)
 
-        for time_series in sorted_time_series:
-            if time_series._metering_data is not None:
-                number_of_hours = len(time_series._metering_data)
+    async def _get_last_stat(self, hass: HomeAssistant):
+        last_stats = await get_instance(hass).async_add_executor_job(
+            get_last_statistics, hass, 1, self.entity_id, True, {"sum"}
+        )
+        if self.entity_id in last_stats and len(last_stats[self.entity_id]) > 0:
+            return last_stats[self.entity_id][0]
+        return None
 
-                # data_date returned is end of the time series
-                date = time_series.data_date - timedelta(hours=number_of_hours)
+    async def _insert_statistics(self, new_data: dict[datetime, float], last_stat):
+        statistics: list[StatisticData] = []
+        total = last_stat["sum"] if last_stat is not None else 0
 
-                for hour in range(0, number_of_hours):
-                    start = date + timedelta(hours=hour)
-
-                    total += time_series.get_metering_data(hour + 1)
-
-                    statistics.append(
-                        StatisticData(
-                            start=start,
-                            sum=total
-                        ))
+        for time, value in sorted(new_data.items()):
+            total += value
+            statistics.append(StatisticData(start=time, sum=total))
 
         metadata = StatisticMetaData(
             name=self._attr_name,
             source=RECORDER_DOMAIN,
             statistic_id=self.entity_id,
-            unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+            unit_of_measurement=self._attr_native_unit_of_measurement,
             has_mean=False,
             has_sum=True,
+            mean_type=StatisticMeanType.NONE,
         )
-
-        if len(statistics) > 0:
+        if statistics:
             async_import_statistics(self.hass, metadata, statistics)
-
-    async def _get_last_stat(self, hass: HomeAssistant) -> StatisticsRow | None:
-        last_stats = await get_instance(hass).async_add_executor_job(
-            get_last_statistics, hass, 1, self.entity_id, True, {"sum"}
-        )
-
-        if self.entity_id in last_stats and len(last_stats[self.entity_id]) > 0:
-            return last_stats[self.entity_id][0]
-        else:
-            return None

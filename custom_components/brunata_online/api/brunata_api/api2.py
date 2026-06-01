@@ -5,32 +5,29 @@ import logging
 import re
 import secrets
 import urllib.parse
-from http.cookies import BaseCookie
+from asyncio import timeout as async_timeout
 from socket import gaierror
 
 from aiohttp import ClientError, ClientResponse
-from async_timeout import timeout as async_timeout
 
 from .models import *
 from .utils import from_response
 from ..result import Result
-
-logging.basicConfig(level=logging.DEBUG)
-_LOGGER: logging.Logger = logging.getLogger(__package__)
-TIMEOUT = 10
-
 from ..const import (
     API_URL,
-    AUTHN_URL,
     CLIENT_ID,
     CONSUMPTION_URL,
     HEADERS,
+    KEYCLOAK_AUTH_URL,
+    KEYCLOAK_TOKEN_URL,
     METERS_URL,
-    OAUTH2_PROFILE,
-    OAUTH2_URL,
     REDIRECT,
     Consumption,
-    Interval, )
+    Interval,
+)
+
+_LOGGER: logging.Logger = logging.getLogger(__package__)
+TIMEOUT = 10
 
 
 class BrunataApi:
@@ -39,122 +36,128 @@ class BrunataApi:
         self._username = username
         self._password = password
         self._session = session
-        self._tokens = {}
+        self._tokens: dict = {}
 
-    def _is_token_valid(self, token: str) -> bool:
+    # ── Token management ────────────────────────────────────────────────────────
+
+    def _is_token_valid(self, kind: str) -> bool:
         if not self._tokens:
             return False
-        match token:
-            case "access_token":
-                ts = self._tokens.get("expires_on")
-                if datetime.fromtimestamp(ts) < datetime.now():
-                    return False
-            case "refresh":
-                ts = self._tokens.get("refresh_token_expires_on")
-                if datetime.fromtimestamp(ts) < datetime.now():
-                    return False
+        if kind == "access_token":
+            ts = self._tokens.get("expires_on")
+            return ts is not None and datetime.fromtimestamp(ts) > datetime.now()
+        if kind == "refresh_token":
+            # Keycloak sets refresh_expires_in=0 for session-scoped tokens (no hard expiry).
+            # Treat those as valid until an API call fails.
+            expires_on = self._tokens.get("refresh_token_expires_on")
+            if expires_on is None or expires_on == 0:
+                return bool(self._tokens.get("refresh_token"))
+            return datetime.fromtimestamp(expires_on) > datetime.now()
         return True
 
-    async def _renew_tokens(self) -> dict:
+    async def _refresh_tokens(self) -> dict:
         if self._is_token_valid("access_token"):
             _LOGGER.debug(
-                "Token is not expired, expires in %d seconds",
-                self._tokens.get("expires_on") - int(datetime.now().timestamp()),
-                )
+                "Access token still valid, expires in %d s",
+                self._tokens.get("expires_on", 0) - int(datetime.now().timestamp()),
+            )
             return self._tokens
-        # Get OAuth 2.0 token object
-        try:
-            tokens = await self._api_wrapper(
-                method="POST",
-                url=f"{OAUTH2_URL}/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": self._tokens.get("refresh_token"),
-                    "CLIENT_ID": CLIENT_ID,
-                }
-            )
-        except Exception as error:  # pylint: disable=broad-except
-            _LOGGER.error("An error occurred while trying to renew tokens: %s", error)
+
+        async with self._session.post(
+            KEYCLOAK_TOKEN_URL,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": CLIENT_ID,
+                "refresh_token": self._tokens.get("refresh_token"),
+            },
+        ) as resp:
+            if not resp.ok:
+                _LOGGER.error("Token refresh failed: %d", resp.status)
+                return {}
+            return await resp.json()
+
+    # ── Keycloak PKCE auth flow ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _generate_pkce() -> tuple[str, str]:
+        raw = base64.urlsafe_b64encode(secrets.token_bytes(40)).decode()
+        verifier = re.sub("[^a-zA-Z0-9]+", "", raw)
+        digest = hashlib.sha256(verifier.encode()).digest()
+        challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+        return verifier, challenge
+
+    async def _keycloak_auth(self) -> dict:
+        code_verifier, code_challenge = self._generate_pkce()
+
+        # Step 1: GET the Keycloak login page
+        async with self._session.get(
+            KEYCLOAK_AUTH_URL,
+            params={
+                "client_id": CLIENT_ID,
+                "redirect_uri": REDIRECT,
+                "scope": "openid offline_access",
+                "response_type": "code",
+                "code_challenge": code_challenge,
+                "code_challenge_method": "S256",
+            },
+            allow_redirects=False,
+        ) as resp:
+            if resp.status not in (200, 302):
+                _LOGGER.error("Keycloak auth page failed: %d %s", resp.status, resp.url)
+                return {}
+
+            # If Keycloak already has a valid session it may skip the login form
+            # and redirect straight to our redirect_uri with a code.
+            if resp.status == 302:
+                loc = resp.headers.get("Location", "")
+                if loc.startswith(REDIRECT) and "code=" in loc:
+                    auth_code = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)["code"][0]
+                    return await self._exchange_code(auth_code, code_verifier)
+                _LOGGER.error("Unexpected redirect from Keycloak auth: %s", loc[:200])
+                return {}
+
+            body = await resp.text()
+
+        # Extract form action URL from the login page
+        m = re.search(r'action="([^"]+)"', body)
+        if not m:
+            _LOGGER.error("Keycloak login form action not found in response")
             return {}
-        return await tokens.value.json()
+        form_action = m.group(1).replace("&amp;", "&")
 
-    async def _calculate_code_challenge(self, code_verifier: str) -> str:
-        def _hash():
-            challenge = hashlib.sha256(code_verifier.encode("utf-8")).digest()
-            return base64.urlsafe_b64encode(challenge).decode("utf-8").replace("=", "")
+        # Step 2: POST credentials to the login form
+        async with self._session.post(
+            form_action,
+            data={
+                "username": self._username,
+                "password": self._password,
+                "credentialId": "",
+            },
+            allow_redirects=False,
+        ) as resp:
+            redirect_loc = resp.headers.get("Location", "")
+            if not redirect_loc.startswith(REDIRECT) or "code=" not in redirect_loc:
+                body = await resp.text()
+                import re as _re
+                # Extract Keycloak error message from the page
+                err_match = _re.search(
+                    r'class="[^"]*(?:pf-c-alert__title|kc-feedback-text|alert-error)[^"]*"[^>]*>(.*?)</(?:span|p|div)',
+                    body, _re.S
+                )
+                kc_error = _re.sub(r"<[^>]+>", "", err_match.group(1)).strip() if err_match else "no error text found"
+                _LOGGER.error(
+                    "Credential POST failed — status=%d location=%s keycloak_error=%s",
+                    resp.status, redirect_loc[:200], kc_error,
+                )
+                return {}
 
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _hash, None)
+        auth_code = urllib.parse.parse_qs(urllib.parse.urlparse(redirect_loc).query)["code"][0]
+        return await self._exchange_code(auth_code, code_verifier)
 
-    async def _b2c_auth(self) -> dict:
-        headers = {
-            "User-Agent": "ha-brunata/0.0.1",
-            "Accept": "*/*",
-            "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
-        }
-        # aiohttp.CookieJar(unsafe=True)
-
-        # Initialize challenge values
-        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(40)).decode("utf-8")
-        code_verifier = re.sub("[^a-zA-Z0-9]+", "", code_verifier)
-        code_challenge = await self._calculate_code_challenge(code_verifier)
-        req_code = await self._call_authorize(code_challenge)
-        if not req_code.ok:
-            _LOGGER.error("Req Code failed")
-        # Get CSRF Token & Transaction ID
-        try:
-            csrf_token = str(req_code.cookies.get("x-ms-cpim-csrf").value)
-        except KeyError as exception:
-            _LOGGER.error("Error while retrieving CSRF Token: %s", exception)
-            return {}
-        text = await req_code.text()
-        match = re.search(r"var SETTINGS = (\{[^;]*\});", text)
-        if match:  # Use a little magic to avoid proper JSON parsing ✨
-            transaction_id = [
-                i for i in match.group(1).split('","') if i.startswith("transId")
-            ][0][10:]
-            _LOGGER.debug("Transaction ID: %s", transaction_id)
-        else:
-            _LOGGER.error("Failed to get Transaction ID")
-            return {}
-        # Post credentials to B2C Endpoint
-        cookies = self._session.cookie_jar.filter_cookies("https://brunatab2cprod.b2clogin.com")
-        # cookie_header = "; ".join([f"{k}={v.value.replace("\"", "")}" for k, v in cookies.items()])
-        # for k, v in cookies.items():
-        #     _LOGGER.info(f"Will send cookie: {k}={v.value[:40]}...")
-        #
-        # _LOGGER.info(cookie_header)
-
-        req_auth = await self._call_selfAsserted(cookies, csrf_token, req_code, transaction_id)
-        cookies = self._session.cookie_jar.filter_cookies("https://brunatab2cprod.b2clogin.com")
-        assert req_auth.status == 200
-        cookies_parsed = {k: v.value for k, v in cookies.items()}
-        # Get authentication code
-        req_auth = await self._call_signin(cookies_parsed, csrf_token, transaction_id)
-        if not req_auth.ok:
-            _LOGGER.error("Second Req Auth failed")
-        redirect = req_auth.headers["Location"]
-        assert redirect.startswith(REDIRECT)
-        _LOGGER.debug("%d - %s", req_auth.status, redirect)
-        try:
-            auth_code = urllib.parse.parse_qs(
-                urllib.parse.urlparse(redirect).query
-            )["code"][0]
-        except KeyError:
-            _LOGGER.error(
-                "An error has occurred while attempting to authenticate. \
-                    Please ensure your credentials are correct"
-            )
-            return {}
-        # Get OAuth 2.0 token object
-        tokens = await self.call_token(auth_code, code_verifier)
-        return await tokens.json()
-
-    async def call_token(self, auth_code: str, code_verifier: str) -> ClientResponse:
-        return await self._session.request(
-            method="POST",
-            url=f"{OAUTH2_URL}/token",
+    async def _exchange_code(self, auth_code: str, code_verifier: str) -> dict:
+        """Exchange an authorization code for tokens."""
+        async with self._session.post(
+            KEYCLOAK_TOKEN_URL,
             data={
                 "grant_type": "authorization_code",
                 "client_id": CLIENT_ID,
@@ -162,131 +165,64 @@ class BrunataApi:
                 "code": auth_code,
                 "code_verifier": code_verifier,
             },
-        )
+        ) as resp:
+            if not resp.ok:
+                body = await resp.text()
+                _LOGGER.error("Token exchange failed: %d %s", resp.status, body[:200])
+                return {}
+            return await resp.json()
 
-    async def _call_signin(self, cookies_parsed: dict[str, str], csrf_token: str, transaction_id) -> ClientResponse:
-        return await self._session.get(
-            url=f"{AUTHN_URL}/api/CombinedSigninAndSignup/confirmed",
-            params={
-                "rememberMe": str(False),
-                "csrf_token": csrf_token,
-                "tx": transaction_id,
-                "p": OAUTH2_PROFILE,
-            },
-            allow_redirects=False,
-            headers={},
-            cookies=cookies_parsed,
-        )
-
-    async def _call_selfAsserted(self, cookies: BaseCookie[str], csrf_token: str, req_code: ClientResponse,
-                                 transaction_id) -> ClientResponse:
-        return await self._session.post(
-            url=f"{AUTHN_URL}/SelfAsserted",
-            params={
-                "tx": transaction_id,
-                "p": OAUTH2_PROFILE,
-            },
-            data={
-                "request_type": "RESPONSE",
-                "logonIdentifier": self._username,
-                "password": self._password,
-            },
-            headers={
-                "Referer": str(req_code.url).replace("redirect_uri=https://online.brunata.com/auth-response",
-                                                     "redirect_uri=https%3A%2F%2Fonline.brunata.com%2Fauth-response"),
-                "X-Csrf-Token": csrf_token,
-                "X-Requested-With": "XMLHttpRequest",
-                "Connection": "keep-alive",
-            },
-            allow_redirects=False,
-            cookies=cookies,
-        )
-
-    async def _call_authorize(self, code_challenge: str) -> ClientResponse:
-        import sys
-        print(f"[BRUNATA DEBUG] Session type: {type(self._session)}", file=sys.stderr, flush=True)
-        print(f"[BRUNATA DEBUG] Session module: {self._session.__class__.__module__}", file=sys.stderr, flush=True)
-
-        url = f"{API_URL.replace('webservice', 'auth-webservice')}/authorize"
-        req_code = await self._session.get(
-            url=url,
-            params={
-                "client_id": CLIENT_ID,
-                "redirect_uri": REDIRECT,
-                "scope": f"{CLIENT_ID} offline_access",
-                "response_type": "code",
-                "code_challenge": code_challenge,
-                "code_challenge_method": "S256",
-            },
-            headers=HEADERS,
-        )
-        return req_code
+    # ── Token gate ──────────────────────────────────────────────────────────────
 
     async def _get_tokens(self) -> bool:
-        """
-        Get access/refresh tokens using credentials or refresh token
-        Returns True if tokens are valid
-        """
-        # Check values
-        if not self._is_token_valid("refresh_token"):
-            tokens = await self._b2c_auth()
+        """Ensure a valid access token is in the session. Returns True on success."""
+        if self._is_token_valid("refresh_token"):
+            tokens = await self._refresh_tokens()
         else:
-            tokens = await self._renew_tokens()
-        # Ensure validity of tokens
+            tokens = await self._keycloak_auth()
+
         if tokens.get("access_token"):
-            # Add access token to session headers
-            self._session.headers.update(
-                {
-                    "Authorization": f"{tokens.get('token_type')} {tokens.get('access_token')}",
-                }
-            )
-            # Calculate refresh expiry
-            if tokens.get("refresh_token") != self._tokens.get("refresh_token"):
-                tokens.update(
-                    {
-                        "refresh_token_expires_on": int(datetime.now().timestamp())
-                                                    + tokens.get("refresh_token_expires_in")
-                    }
-                )
+            now = int(datetime.now().timestamp())
+            tokens.setdefault("expires_on", now + tokens.get("expires_in", 3600))
+            refresh_exp = tokens.get("refresh_expires_in", 0)
+            if refresh_exp and refresh_exp > 0:
+                tokens.setdefault("refresh_token_expires_on", now + refresh_exp)
             self._tokens.update(tokens)
         else:
             self._tokens = {}
             _LOGGER.error("Failed to get tokens")
+
         return bool(self._tokens)
 
-    async def _api_wrapper(self, **args) -> Result[ClientResponse]:
-        """Get information from the API."""
-        args["headers"] = HEADERS
+    # ── API wrapper ─────────────────────────────────────────────────────────────
+
+    def _auth_headers(self) -> dict:
+        token = self._tokens.get("access_token", "")
+        token_type = self._tokens.get("token_type", "Bearer")
+        return {**HEADERS, "Authorization": f"{token_type} {token}"}
+
+    async def _api_wrapper(self, **kwargs) -> Result[ClientResponse]:
+        kwargs["headers"] = self._auth_headers()
         async with async_timeout(TIMEOUT):
             try:
-                async with self._session.request(**args) as response:
+                async with self._session.request(**kwargs) as response:
                     await response.read()
                     response.raise_for_status()
                     return Result[ClientResponse](response)
-            except asyncio.TimeoutError as exception:
-                _LOGGER.error(
-                    "Timeout error fetching information from %s - %s",
-                    args["url"],
-                    exception,
-                )
-                return Result[ClientResponse](exception)
-            except (KeyError, TypeError) as exception:
-                _LOGGER.error(
-                    "Error parsing information from %s - %s",
-                    args["url"],
-                    exception,
-                )
-                return Result[ClientResponse](exception)
-            except (ClientError, gaierror) as exception:
-                _LOGGER.error(
-                    "Error fetching information from %s - %s",
-                    args["url"],
-                    exception,
-                )
-                return Result[ClientResponse](exception)
-            except Exception as exception:  # pylint: disable=broad-except
-                _LOGGER.error("Something really wrong happened! - %s", exception)
-                return Result[ClientResponse](exception)
+            except asyncio.TimeoutError as exc:
+                _LOGGER.error("Timeout fetching %s: %s", kwargs.get("url"), exc)
+                return Result[ClientResponse](exc)
+            except (KeyError, TypeError) as exc:
+                _LOGGER.error("Parse error from %s: %s", kwargs.get("url"), exc)
+                return Result[ClientResponse](exc)
+            except (ClientError, gaierror) as exc:
+                _LOGGER.error("Request error from %s: %s", kwargs.get("url"), exc)
+                return Result[ClientResponse](exc)
+            except Exception as exc:  # pylint: disable=broad-except
+                _LOGGER.error("Unexpected error: %s", exc)
+                return Result[ClientResponse](exc)
+
+    # ── Public API methods ──────────────────────────────────────────────────────
 
     async def get_mapping_configuration(self, locale: str = "en") -> Result[MappersConfiguration]:
         if not await self._get_tokens():
@@ -294,26 +230,19 @@ class BrunataApi:
         response = await self._api_wrapper(
             method="GET",
             url=f"{API_URL}/locales/{locale}/common",
-            headers={
-                "Referer": CONSUMPTION_URL,
-            },
+            headers={"Referer": CONSUMPTION_URL},
         )
         if response.is_error():
             return Result[MappersConfiguration](response.value)
-        # Response contains a lot of localisation strings, we dont need.
-        # We only care about the 'mappers' section, since it contains mappings for allocation units, units etc.
         return Result[MappersConfiguration]((await from_response(response.value, Configuration, False)).mappers)
 
     async def get_allocation_units(self) -> Result[AllocationUnitResult]:
-        """Get all meters associated with the account."""
         if not await self._get_tokens():
             return Result[AllocationUnitResult](Exception("Failed to get tokens"))
         response = await self._api_wrapper(
             method="GET",
             url=f"{API_URL}/consumer/superallocationunits",
-            headers={
-                "Referer": CONSUMPTION_URL,
-            },
+            headers={"Referer": CONSUMPTION_URL},
         )
         if response.is_error():
             return Result[AllocationUnitResult](response.value)
@@ -322,42 +251,38 @@ class BrunataApi:
     async def get_meters(self) -> Result[MeterResult]:
         if not await self._get_tokens():
             return Result[MeterResult](Exception("Failed to get tokens"))
-        date = datetime.now()
-        date = date.replace(hour=0, minute=0, second=0, microsecond=0)
-
+        date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         response = await self._api_wrapper(
             method="GET",
             url=f"{API_URL}/consumer/meters",
-            params={
-                "startdate": f"{date.isoformat()}.000Z",
-            },
-            headers={
-                "Referer": METERS_URL,
-            },
+            params={"startdate": f"{date.strftime('%Y-%m-%dT%H:%M:%S')}.000Z"},
+            headers={"Referer": METERS_URL},
         )
         if response.is_error():
             return Result[MeterResult](response.value)
-        return Result[MeterResult](await (from_response(response.value, MeterResult, False)))
+        return Result[MeterResult](await from_response(response.value, MeterResult, False))
 
-    async def get_consumption(self, start_date: datetime, end_date: datetime, _type: Consumption, allocation_unit: str,
-                              interval: Interval) -> Result[ConsumptionResult]:
-        """Get consumption data for a specific meter type."""
+    async def get_consumption(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        _type: Consumption,
+        allocation_unit: str,
+        interval: Interval,
+    ) -> Result[ConsumptionResult]:
         if not await self._get_tokens():
             return Result[ConsumptionResult](Exception("Failed to get tokens"))
-        start = f"{start_date.isoformat()}.000Z"
-        end = f"{end_date.isoformat()}.999Z"
+        fmt = "%Y-%m-%dT%H:%M:%S"
         response = await self._api_wrapper(
             method="GET",
             url=f"{API_URL}/consumer/consumption",
             params={
-                "startdate": start,
-                "enddate": end,
+                "startdate": f"{start_date.strftime(fmt)}.000Z",
+                "enddate": f"{end_date.strftime(fmt)}.999Z",
                 "interval": interval.value,
                 "allocationunit": allocation_unit,
             },
-            headers={
-                "Referer": f"{CONSUMPTION_URL}/{_type.name.lower()}",
-            },
+            headers={"Referer": f"{CONSUMPTION_URL}/{_type.name.lower()}"},
         )
         if response.is_error():
             return Result[ConsumptionResult](response.value)

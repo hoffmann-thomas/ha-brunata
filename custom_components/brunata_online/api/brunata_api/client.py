@@ -27,15 +27,15 @@ class BrunataClient:
     async def _update_metadata(self, locale: str = "en"):
         mapping_config = await self.api.get_mapping_configuration(locale)
         if mapping_config.is_error():
-            _LOGGER.error("Failed to retrieve mapping configuration for locale %s", locale)
+            raise RuntimeError(f"Failed to retrieve mapping configuration: {mapping_config.value}")
 
         allocation_units = await self.api.get_allocation_units()
         if allocation_units.is_error():
-            _LOGGER.error("Failed to retrieve allocation units")
+            raise RuntimeError(f"Failed to retrieve allocation units: {allocation_units.value}")
 
         meters = await self.api.get_meters()
         if meters.is_error():
-            _LOGGER.error("Failed to retrieve meters")
+            raise RuntimeError(f"Failed to retrieve meters: {meters.value}")
 
         self.meter_reader.configure_metadata(mapping_config.value, allocation_units.value, meters.value)
 
@@ -51,7 +51,7 @@ class BrunataClient:
             await self.connect()
         consumption = await self.api.get_consumption(start_date, end_date, _type, unit, interval)
         if consumption.is_error():
-            _LOGGER.error("Failed to retrieve consumption")
+            raise RuntimeError(f"Failed to retrieve consumption: {consumption.value}")
         result = self.meter_reader.enrich_consumption_data(consumption.value)
         return result
 

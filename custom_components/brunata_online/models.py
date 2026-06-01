@@ -14,9 +14,14 @@ class MeterData:
 
     def update_from_reading(self, reading) -> None:
         """Merge a reading.Values list into this meter's data."""
+        from datetime import timezone
         for v in reading.Values:
-            key = v.starttime
-            self.values[key] = v.value
+            if v.consumption is None:
+                continue
+            dt = v.fromDate
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            self.values[dt] = v.consumption
 
     def latest_value(self) -> Optional[float]:
         """Return the most recent value if available."""
