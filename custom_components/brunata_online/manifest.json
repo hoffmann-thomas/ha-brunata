@@ -7,7 +7,9 @@
   "homeassistant": "2026.5.0",
   "dependencies": ["recorder"],
   "documentation": "https://github.com/hoffmann-thomas/ha-brunata",
+  "issue_tracker": "https://github.com/hoffmann-thomas/ha-brunata/issues",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
+  "platforms": ["sensor"],
   "requirements": []
 }
