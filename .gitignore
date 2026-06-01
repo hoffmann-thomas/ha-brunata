@@ -1,8 +1,41 @@
-__pycache__
-pythonenv*
+# Python
+__pycache__/
+*.py[cod]
+*.pycache
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+pythonenv*/
 .python-version
+
+# Coverage / testing
 .coverage
-venv
-.venv
+htmlcov/
+.pytest_cache/
+.tox/
+
+# IDE — JetBrains (PyCharm, IntelliJ)
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# IDE — VS Code
+.vscode/
+
+# Miscellaneous IDE / tooling archives
+*.zip
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Home Assistant dev artefacts
 docs/archives
 docs/json
+
+# macOS
+.DS_Store

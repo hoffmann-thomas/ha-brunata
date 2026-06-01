@@ -3,29 +3,18 @@
     "step": {
       "user": {
         "title": "Brunata Online",
-        "description": "If you need help with the configuration have a look here: https://github.com/YukiElectronics/ha-brunata",
+        "description": "Enter your Brunata Online login credentials.",
         "data": {
-          "username": "Username",
+          "username": "Username / Email",
           "password": "Password"
         }
       }
     },
     "error": {
-      "auth": "Username/Password is wrong."
+      "auth": "Invalid username or password."
     },
     "abort": {
-      "single_instance_allowed": "Only a single instance is allowed."
-    }
-  },
-  "options": {
-    "step": {
-      "user": {
-        "data": {
-          "binary_sensor": "Binary sensor enabled",
-          "sensor": "Sensor enabled",
-          "switch": "Switch enabled"
-        }
-      }
+      "already_configured": "This Brunata account is already configured."
     }
   }
 }
