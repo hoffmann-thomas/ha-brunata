@@ -1,6 +1,6 @@
 """Sensor platform for Brunata Online."""
 import logging
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
@@ -42,9 +42,6 @@ def _resolve_unit(meter: Meter) -> tuple[SensorDeviceClass | None, str]:
     api_unit = (meter.unit or "").strip()
     if api_unit in _API_UNIT_MAP:
         return _API_UNIT_MAP[api_unit]
-    # Unknown unit (e.g. Brunata's proprietary radiator "units") — keep the
-    # raw string so the value is displayed correctly even if the energy
-    # dashboard cannot aggregate it as energy.
     _LOGGER.debug("Meter %s has unrecognised unit %r; storing as-is", meter.meter_id, api_unit)
     return None, api_unit
 
@@ -68,9 +65,9 @@ async def async_setup_entry(hass, entry, async_add_devices):
 class BrunataStatisticsSensor(SensorEntity):
     """Statistics sensor for a single Brunata meter.
 
-    Device class and unit are resolved at runtime from the meter's API-reported
-    unit string, so the sensor works correctly for water (m³), electricity (kWh),
-    district heating (GJ/MWh) and Brunata's proprietary radiator units alike.
+    Historical (completed) days are stored as daily statistics.
+    Today's running total is stamped at the current UTC hour and updated on
+    every poll, giving hourly intra-day resolution in the energy dashboard.
     """
 
     _attr_state_class = SensorStateClass.TOTAL
@@ -92,58 +89,86 @@ class BrunataStatisticsSensor(SensorEntity):
         return data.get_latest_value(str(self._meter.meter_id))
 
     async def async_added_to_hass(self) -> None:
-        """Clear any corrupted statistics on startup so they get re-imported cleanly."""
+        """Clear any corrupted statistics on startup so they re-import cleanly."""
         await get_instance(self.hass).async_clear_statistics([self.entity_id])
 
     async def async_will_remove_from_hass(self) -> None:
         await get_instance(self.hass).async_clear_statistics([self.entity_id])
 
     async def async_update(self):
-        last_stat = await self._get_last_stat(self.hass)
-        self.hass.async_create_task(self._update_data(last_stat))
+        now_utc = datetime.now(tz=UTC)
+        yesterday_midnight_utc = now_utc.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=1)
+
+        # Use the last *completed-day* stat as the baseline so today's hourly
+        # entries do not interfere with historical data insertion.
+        base_stat = await self._get_base_stat(self.hass, before=yesterday_midnight_utc)
+        self.hass.async_create_task(self._update_data(base_stat))
         self.async_write_ha_state()
 
-    async def _update_data(self, last_stat):
+    async def _update_data(self, base_stat):
+        """Insert completed-day statistics and update today's hourly entry."""
         data: MeterDataSet = self.coordinator.data
         meter = data.get_meter(str(self._meter.meter_id))
         if meter is None:
             _LOGGER.debug("No coordinator data yet for meter %s", self._meter.meter_id)
             return
 
-        # Only insert completed days. Today's partial value fluctuates and, when
-        # inserted with a lower cumulative than the previous day's final entry,
-        # causes the energy dashboard to show negative usage.
-        today_midnight_utc = datetime.now(tz=UTC).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        now_utc = datetime.now(tz=UTC)
+        today_midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_midnight_utc = today_midnight_utc - timedelta(days=1)
+        current_hour_utc = now_utc.replace(minute=0, second=0, microsecond=0)
 
-        if last_stat is not None:
-            data_cutoff = datetime.fromtimestamp(last_stat["start"], tz=UTC)
-            new_data = {k: v for k, v in meter.values.items()
-                        if k > data_cutoff and k < today_midnight_utc}
+        # ── Part 1: completed days ───────────────────────────────────────────
+        # Brunata daily data is timestamped at CEST midnight (= 22:00 UTC previous day).
+        # Filtering k < yesterday_midnight_utc naturally excludes today's Danish day
+        # (stored at 22:00 UTC yesterday, which is AFTER yesterday midnight UTC)
+        # while including all prior completed days.
+        if base_stat is not None:
+            data_cutoff = datetime.fromtimestamp(base_stat["start"], tz=UTC)
+            historical = {k: v for k, v in meter.values.items()
+                          if data_cutoff < k < yesterday_midnight_utc}
         else:
-            new_data = {k: v for k, v in meter.values.items() if k < today_midnight_utc}
+            historical = {k: v for k, v in meter.values.items()
+                          if k < yesterday_midnight_utc}
 
-        if new_data:
-            await self._insert_statistics(new_data, last_stat)
+        if historical:
+            await self._insert_statistics(historical, base_stat)
+            # Refresh base_stat so today's hourly entry builds on the latest sum
+            base_stat = await self._get_base_stat(self.hass, before=yesterday_midnight_utc)
 
-    async def _get_last_stat(self, hass: HomeAssistant):
-        last_stats = await get_instance(hass).async_add_executor_job(
-            get_last_statistics, hass, 1, self.entity_id, True, {"sum"}
+        # ── Part 2: today's hourly entry ─────────────────────────────────────
+        # Today's Danish partial sits in [yesterday_midnight_utc, today_midnight_utc).
+        today_data = {k: v for k, v in meter.values.items()
+                      if yesterday_midnight_utc <= k < today_midnight_utc}
+        if not today_data:
+            return
+
+        today_value = sum(today_data.values())
+        base_sum = base_stat["sum"] if base_stat else 0
+
+        metadata = self._make_metadata()
+        async_import_statistics(
+            self.hass,
+            metadata,
+            [StatisticData(start=current_hour_utc, sum=base_sum + today_value)],
         )
-        if self.entity_id in last_stats and len(last_stats[self.entity_id]) > 0:
-            return last_stats[self.entity_id][0]
+
+    # ── Helpers ─────────────────────────────────────────────────────────────
+
+    async def _get_base_stat(self, hass: HomeAssistant, before: datetime):
+        """Return the most recent statistic whose start timestamp is before *before*."""
+        last_stats = await get_instance(hass).async_add_executor_job(
+            get_last_statistics, hass, 20, self.entity_id, True, {"sum"}
+        )
+        for stat in last_stats.get(self.entity_id, []):
+            if datetime.fromtimestamp(stat["start"], tz=UTC) < before:
+                return stat
         return None
 
-    async def _insert_statistics(self, new_data: dict[datetime, float], last_stat):
-        statistics: list[StatisticData] = []
-        total = last_stat["sum"] if last_stat is not None else 0
-
-        for time, value in sorted(new_data.items()):
-            total += value
-            statistics.append(StatisticData(start=time, sum=total))
-
-        metadata = StatisticMetaData(
+    def _make_metadata(self) -> StatisticMetaData:
+        return StatisticMetaData(
             name=self._attr_name,
             source=RECORDER_DOMAIN,
             statistic_id=self.entity_id,
@@ -152,5 +177,14 @@ class BrunataStatisticsSensor(SensorEntity):
             has_sum=True,
             mean_type=StatisticMeanType.NONE,
         )
+
+    async def _insert_statistics(self, new_data: dict[datetime, float], base_stat):
+        statistics: list[StatisticData] = []
+        total = base_stat["sum"] if base_stat is not None else 0
+
+        for time, value in sorted(new_data.items()):
+            total += value
+            statistics.append(StatisticData(start=time, sum=total))
+
         if statistics:
-            async_import_statistics(self.hass, metadata, statistics)
+            async_import_statistics(self.hass, self._make_metadata(), statistics)
