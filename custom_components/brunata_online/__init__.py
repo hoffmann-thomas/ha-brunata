@@ -1,9 +1,5 @@
-"""
-Custom integration to integrate Brunata Online with Home Assistant.
-
-For more details about this integration, please refer to
-https://github.com/YukiElectronics/ha-brunata
-"""
+"""Brunata Online integration for Home Assistant."""
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -16,80 +12,72 @@ from homeassistant.exceptions import ConfigEntryNotReady
 
 from custom_components.brunata_online.api.brunata_api.client import BrunataClient
 from .coordinator import BrunataOnlineDataUpdateCoordinator
+from .const import CONF_PASSWORD, CONF_USERNAME, DOMAIN, PLATFORMS, STARTUP_MESSAGE
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
-from .const import (
-    CONF_PASSWORD,
-    CONF_USERNAME,
-    DOMAIN,
-    PLATFORMS,
-    SCAN_INTERVAL,
-    STARTUP_MESSAGE,
-)
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up this integration using YAML is not supported."""
+    """YAML setup is not supported; only UI config entries."""
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up this integration using UI."""
-    if hass.data.get(DOMAIN) is None:
-        hass.data.setdefault(DOMAIN, {})
+    """Set up Brunata Online from a config entry."""
+    hass.data.setdefault(DOMAIN, {})
+    if not hass.data[DOMAIN]:
         _LOGGER.info(STARTUP_MESSAGE)
 
-    username = entry.data.get(CONF_USERNAME)
-    password = entry.data.get(CONF_PASSWORD)
-
-    # Create a dedicated session with an unsafe cookie jar — required for the
-    # Brunata B2C auth flow which uses cross-domain cookies. HA's shared session
-    # cannot be customised, so we own this session and close it on unload.
     session = aiohttp.ClientSession(
         cookie_jar=CookieJar(unsafe=True, quote_cookie=False)
     )
 
-    client = BrunataClient(username, password, session, "en")
-    sensors = await client.get_meters()
-
-    coordinator = BrunataOnlineDataUpdateCoordinator(hass, client=client, sensors_result=sensors)
-    await coordinator.async_refresh()
-
-    if not coordinator.last_update_success:
+    try:
+        client = BrunataClient(
+            entry.data[CONF_USERNAME],
+            entry.data[CONF_PASSWORD],
+            session,
+            "en",
+        )
+        meters = await client.get_meters()
+    except Exception as err:
         await session.close()
-        raise ConfigEntryNotReady
+        raise ConfigEntryNotReady(f"Failed to connect to Brunata: {err}") from err
+
+    coordinator = BrunataOnlineDataUpdateCoordinator(hass, client=client, sensors_result=meters)
+    await coordinator.async_config_entry_first_refresh()
 
     hass.data[DOMAIN][entry.entry_id] = {"coordinator": coordinator, "session": session}
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    entry.add_update_listener(async_reload_entry)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Handle removal of an entry."""
-    entry_data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: BrunataOnlineDataUpdateCoordinator = entry_data["coordinator"]
-    session: aiohttp.ClientSession = entry_data["session"]
+    """Unload a config entry."""
+    entry_data: dict = hass.data[DOMAIN].get(entry.entry_id, {})
+    coordinator: BrunataOnlineDataUpdateCoordinator = entry_data.get("coordinator")
+    session: aiohttp.ClientSession = entry_data.get("session")
 
     unloaded = all(
         await asyncio.gather(
             *[
                 hass.config_entries.async_forward_entry_unload(entry, platform)
                 for platform in PLATFORMS
-                if platform in coordinator.platforms
+                if coordinator and platform in coordinator.platforms
             ]
         )
     )
+
     if unloaded:
-        await session.close()
-        hass.data[DOMAIN].pop(entry.entry_id)
+        if session:
+            await session.close()
+        hass.data[DOMAIN].pop(entry.entry_id, None)
 
     return unloaded
 
 
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry when options are updated."""
+    await hass.config_entries.async_reload(entry.entry_id)

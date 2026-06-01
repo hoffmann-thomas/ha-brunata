@@ -10,7 +10,13 @@ from socket import gaierror
 
 from aiohttp import ClientError, ClientResponse
 
-from .models import *
+from .models import (
+    AllocationUnitResult,
+    Configuration,
+    ConsumptionResult,
+    MappersConfiguration,
+    MeterResult,
+)
 from .utils import from_response
 from ..result import Result
 from ..const import (
@@ -138,13 +144,12 @@ class BrunataApi:
             redirect_loc = resp.headers.get("Location", "")
             if not redirect_loc.startswith(REDIRECT) or "code=" not in redirect_loc:
                 body = await resp.text()
-                import re as _re
                 # Extract Keycloak error message from the page
-                err_match = _re.search(
+                err_match = re.search(
                     r'class="[^"]*(?:pf-c-alert__title|kc-feedback-text|alert-error)[^"]*"[^>]*>(.*?)</(?:span|p|div)',
-                    body, _re.S
+                    body, re.S
                 )
-                kc_error = _re.sub(r"<[^>]+>", "", err_match.group(1)).strip() if err_match else "no error text found"
+                kc_error = re.sub(r"<[^>]+>", "", err_match.group(1)).strip() if err_match else "no error text found"
                 _LOGGER.error(
                     "Credential POST failed — status=%d location=%s keycloak_error=%s",
                     resp.status, redirect_loc[:200], kc_error,

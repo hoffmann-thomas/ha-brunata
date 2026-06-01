@@ -1,11 +1,11 @@
 {
   "domain": "brunata_online",
   "name": "Brunata Online",
-  "codeowners": ["@hoffmann-thomas", "@YukiElectronics"],
+  "codeowners": ["@hoffmann-thomas"],
   "config_flow": true,
-  "version": "0.0.1",
-  "dependencies": [],
-  "documentation": "https://github.com/hoffmann-thomas/brunata-online",
+  "version": "1.0.0",
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/hoffmann-thomas/ha-brunata",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "requirements": []

@@ -1,6 +1,8 @@
 """Sensor platform for Brunata Online."""
+from __future__ import annotations
+
 import logging
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
@@ -11,20 +13,23 @@ from homeassistant.components.recorder.statistics import (
     get_last_statistics,
 )
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass, SensorEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfVolume
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import BrunataOnlineDataUpdateCoordinator
 from .api.brunata_api.meter_reader import Meter
 from .api.const import Consumption
 from .const import DOMAIN
+from .entity import brunata_device_info
 from .models import MeterDataSet
 
 _LOGGER = logging.getLogger(__name__)
 
-# Map from Brunata API unit strings to (HA device class, HA native unit).
-# Brunata "units" (varmeenheder) are a proprietary radiator allocation unit
-# with no direct energy equivalent — they are stored as-is.
+# Maps Brunata API unit strings to (HA device class, HA native unit).
+# Brunata "units" (varmeenheder) have no standard energy equivalent and are stored as-is.
 _API_UNIT_MAP: dict[str, tuple[SensorDeviceClass, str]] = {
     "m³":  (SensorDeviceClass.WATER,  UnitOfVolume.CUBIC_METERS),
     "m3":  (SensorDeviceClass.WATER,  UnitOfVolume.CUBIC_METERS),
@@ -38,112 +43,139 @@ _API_UNIT_MAP: dict[str, tuple[SensorDeviceClass, str]] = {
 
 
 def _resolve_unit(meter: Meter) -> tuple[SensorDeviceClass | None, str]:
-    """Return (device_class, native_unit) for a meter based on its API unit string."""
     api_unit = (meter.unit or "").strip()
     if api_unit in _API_UNIT_MAP:
         return _API_UNIT_MAP[api_unit]
-    # Unknown unit (e.g. Brunata's proprietary radiator "units") — keep the
-    # raw string so the value is displayed correctly even if the energy
-    # dashboard cannot aggregate it as energy.
     _LOGGER.debug("Meter %s has unrecognised unit %r; storing as-is", meter.meter_id, api_unit)
     return None, api_unit
 
 
-async def async_setup_entry(hass, entry, async_add_devices):
-    """Setup sensor platform."""
-    coordinator: BrunataOnlineDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Brunata sensors from a config entry."""
+    coordinator: BrunataOnlineDataUpdateCoordinator = (
+        hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    )
 
-    sensors = []
-    for s in coordinator.sensors:
+    entities = []
+    for meter in coordinator.sensors:
         try:
-            Consumption(s.meter_type_code)
+            Consumption(meter.meter_type_code)
         except ValueError:
-            _LOGGER.warning("Unknown meter type code %s for meter %s, skipping", s.meter_type_code, s.meter_id)
+            _LOGGER.warning(
+                "Unknown meter type code %s for meter %s — skipping",
+                meter.meter_type_code, meter.meter_id,
+            )
             continue
-        sensors.append(BrunataStatisticsSensor(coordinator, entry, s))
+        entities.append(BrunataStatisticsSensor(coordinator, entry, meter))
 
-    async_add_devices(sensors)
+    async_add_entities(entities)
 
 
-class BrunataStatisticsSensor(SensorEntity):
-    """Statistics sensor for a single Brunata meter.
+class BrunataStatisticsSensor(
+    CoordinatorEntity[BrunataOnlineDataUpdateCoordinator],
+    SensorEntity,
+):
+    """Long-term statistics sensor for a single Brunata meter.
 
     Device class and unit are resolved at runtime from the meter's API-reported
-    unit string, so the sensor works correctly for water (m³), electricity (kWh),
-    district heating (GJ/MWh) and Brunata's proprietary radiator units alike.
+    unit string, supporting m³, kWh, GJ/MWh and Brunata's proprietary radiator
+    units ("units" / varmeenheder).
+
+    Statistics are imported via async_import_statistics each time the coordinator
+    refreshes.  Today's partial-day value is filtered out to prevent the energy
+    dashboard from showing negative usage.
     """
 
     _attr_state_class = SensorStateClass.TOTAL
-    _attr_should_poll = True
+    _attr_has_entity_name = False
 
-    def __init__(self, coordinator: BrunataOnlineDataUpdateCoordinator, entry, meter: Meter):
-        self.coordinator = coordinator
+    def __init__(
+        self,
+        coordinator: BrunataOnlineDataUpdateCoordinator,
+        entry: ConfigEntry,
+        meter: Meter,
+    ) -> None:
+        super().__init__(coordinator)
         self._meter = meter
+        self._entry = entry
         self._attr_unique_id = f"{meter.meter_id}-statistics"
         self._attr_name = f"Brunata {meter.value_category} - {meter.placement}"
+        self._attr_device_info = brunata_device_info(entry.entry_id)
 
         device_class, native_unit = _resolve_unit(meter)
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = native_unit
 
     @property
-    def native_value(self):
+    def native_value(self) -> float | None:
         data: MeterDataSet = self.coordinator.data
         return data.get_latest_value(str(self._meter.meter_id))
 
     async def async_added_to_hass(self) -> None:
-        """Clear any corrupted statistics on startup so they get re-imported cleanly."""
+        """Subscribe to coordinator and clear any corrupted statistics on startup."""
+        await super().async_added_to_hass()
         await get_instance(self.hass).async_clear_statistics([self.entity_id])
 
     async def async_will_remove_from_hass(self) -> None:
         await get_instance(self.hass).async_clear_statistics([self.entity_id])
 
-    async def async_update(self):
-        last_stat = await self._get_last_stat(self.hass)
-        self.hass.async_create_task(self._update_data(last_stat))
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Respond to coordinator data refresh: update state and import statistics."""
         self.async_write_ha_state()
+        self.hass.async_create_task(self._import_statistics())
 
-    async def _update_data(self, last_stat):
-        data: MeterDataSet = self.coordinator.data
-        meter = data.get_meter(str(self._meter.meter_id))
-        if meter is None:
-            _LOGGER.debug("No coordinator data yet for meter %s", self._meter.meter_id)
+    # ── Statistics import ────────────────────────────────────────────────────
+
+    async def _import_statistics(self) -> None:
+        meter_data = self.coordinator.data.get_meter(str(self._meter.meter_id))
+        if meter_data is None:
+            _LOGGER.debug("No data yet for meter %s", self._meter.meter_id)
             return
 
-        # Only insert completed days. Today's partial value fluctuates and, when
-        # inserted with a lower cumulative than the previous day's final entry,
-        # causes the energy dashboard to show negative usage.
+        last_stat = await self._get_last_stat()
+
+        # Only insert completed days.  Brunata daily data is stamped at CEST
+        # midnight (22:00 UTC of the previous UTC day), so filtering to
+        # k < today_midnight_utc naturally excludes today's partial Danish day
+        # while including all prior completed days.
         today_midnight_utc = datetime.now(tz=UTC).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
 
         if last_stat is not None:
-            data_cutoff = datetime.fromtimestamp(last_stat["start"], tz=UTC)
-            new_data = {k: v for k, v in meter.values.items()
-                        if k > data_cutoff and k < today_midnight_utc}
+            cutoff = datetime.fromtimestamp(last_stat["start"], tz=UTC)
+            new_data = {
+                k: v for k, v in meter_data.values.items()
+                if cutoff < k < today_midnight_utc
+            }
         else:
-            new_data = {k: v for k, v in meter.values.items() if k < today_midnight_utc}
+            new_data = {k: v for k, v in meter_data.values.items() if k < today_midnight_utc}
 
-        if new_data:
-            await self._insert_statistics(new_data, last_stat)
+        if not new_data:
+            return
 
-    async def _get_last_stat(self, hass: HomeAssistant):
-        last_stats = await get_instance(hass).async_add_executor_job(
-            get_last_statistics, hass, 1, self.entity_id, True, {"sum"}
-        )
-        if self.entity_id in last_stats and len(last_stats[self.entity_id]) > 0:
-            return last_stats[self.entity_id][0]
-        return None
-
-    async def _insert_statistics(self, new_data: dict[datetime, float], last_stat):
         statistics: list[StatisticData] = []
-        total = last_stat["sum"] if last_stat is not None else 0
-
-        for time, value in sorted(new_data.items()):
+        total: float = last_stat["sum"] if last_stat else 0.0
+        for ts, value in sorted(new_data.items()):
             total += value
-            statistics.append(StatisticData(start=time, sum=total))
+            statistics.append(StatisticData(start=ts, sum=total))
 
-        metadata = StatisticMetaData(
+        async_import_statistics(self.hass, self._statistics_metadata(), statistics)
+
+    async def _get_last_stat(self) -> dict | None:
+        last = await get_instance(self.hass).async_add_executor_job(
+            get_last_statistics, self.hass, 1, self.entity_id, True, {"sum"}
+        )
+        rows = last.get(self.entity_id, [])
+        return rows[0] if rows else None
+
+    def _statistics_metadata(self) -> StatisticMetaData:
+        return StatisticMetaData(
             name=self._attr_name,
             source=RECORDER_DOMAIN,
             statistic_id=self.entity_id,
@@ -152,5 +184,3 @@ class BrunataStatisticsSensor(SensorEntity):
             has_sum=True,
             mean_type=StatisticMeanType.NONE,
         )
-        if statistics:
-            async_import_statistics(self.hass, metadata, statistics)

@@ -1,34 +1,14 @@
-"""BrunataOnlineEntity class"""
+"""Shared device_info for all Brunata Online entities."""
+from homeassistant.helpers.entity import DeviceInfo
 
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
-from .const import ATTRIBUTION, DOMAIN, NAME, VERSION
+from .const import DOMAIN, NAME, VERSION
 
 
-class BrunataOnlineEntity(CoordinatorEntity):
-    def __init__(self, coordinator, config_entry):
-        super().__init__(coordinator)
-        self.config_entry = config_entry
-
-    @property
-    def unique_id(self):
-        """Return a unique ID to use for this entity."""
-        return self.config_entry.entry_id
-
-    @property
-    def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self.unique_id)},
-            "name": NAME,
-            "model": VERSION,
-            "manufacturer": NAME,
-        }
-
-    @property
-    def device_state_attributes(self):
-        """Return the state attributes."""
-        return {
-            "attribution": ATTRIBUTION,
-            "id": str(self.coordinator.data.get("id")),
-            "integration": DOMAIN,
-        }
+def brunata_device_info(entry_id: str) -> DeviceInfo:
+    """Return a DeviceInfo dict shared by all entities for a config entry."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry_id)},
+        name=NAME,
+        manufacturer="Brunata",
+        sw_version=VERSION,
+    )
