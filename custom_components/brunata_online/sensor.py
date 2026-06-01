@@ -116,9 +116,7 @@ class BrunataStatisticsSensor(
         return data.get_latest_value(str(self._meter.meter_id))
 
     async def async_added_to_hass(self) -> None:
-        """Subscribe to coordinator and clear any corrupted statistics on startup."""
         await super().async_added_to_hass()
-        await get_instance(self.hass).async_clear_statistics([self.entity_id])
 
     async def async_will_remove_from_hass(self) -> None:
         await get_instance(self.hass).async_clear_statistics([self.entity_id])
