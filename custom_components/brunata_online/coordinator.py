@@ -30,7 +30,6 @@ class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator[MeterDataSet]):
     ) -> None:
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=SCAN_INTERVAL)
         self.api = client
-        self.platforms: list[str] = []
         self.sensors = sensors_result
         self.data = MeterDataSet()
         self._last_data_end: datetime | None = None
