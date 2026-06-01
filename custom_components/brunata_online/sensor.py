@@ -42,12 +42,15 @@ _API_UNIT_MAP: dict[str, tuple[SensorDeviceClass, str]] = {
 }
 
 
-def _resolve_unit(meter: Meter) -> tuple[SensorDeviceClass | None, str]:
+def _resolve_unit(meter: Meter) -> tuple[SensorDeviceClass, str]:
     api_unit = (meter.unit or "").strip()
     if api_unit in _API_UNIT_MAP:
         return _API_UNIT_MAP[api_unit]
+    # Brunata's proprietary "units" (varmeenheder) have no HA equivalent.
+    # Fall back to ENERGY device class so the energy dashboard can display
+    # the sensor; the raw unit string is preserved as-is.
     _LOGGER.debug("Meter %s has unrecognised unit %r; storing as-is", meter.meter_id, api_unit)
-    return None, api_unit
+    return SensorDeviceClass.ENERGY, api_unit
 
 
 async def async_setup_entry(
@@ -117,6 +120,14 @@ class BrunataStatisticsSensor(
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        # In HA 2026+, async_add_listener no longer calls the callback
+        # immediately on registration — only on subsequent refreshes.
+        # Trigger state write and first statistics import explicitly.
+        self.async_write_ha_state()
+        self.hass.async_create_task(
+            self._safe_import_statistics(),
+            name=f"brunata_import_initial_{self._meter.meter_id}",
+        )
 
     async def async_will_remove_from_hass(self) -> None:
         await get_instance(self.hass).async_clear_statistics([self.entity_id])
@@ -125,7 +136,16 @@ class BrunataStatisticsSensor(
     def _handle_coordinator_update(self) -> None:
         """Respond to coordinator data refresh: update state and import statistics."""
         self.async_write_ha_state()
-        self.hass.async_create_task(self._import_statistics())
+        self.hass.async_create_task(
+            self._safe_import_statistics(),
+            name=f"brunata_import_{self._meter.meter_id}",
+        )
+
+    async def _safe_import_statistics(self) -> None:
+        try:
+            await self._import_statistics()
+        except Exception:
+            _LOGGER.exception("Error importing statistics for meter %s", self._meter.meter_id)
 
     # ── Statistics import ────────────────────────────────────────────────────
 
@@ -173,11 +193,17 @@ class BrunataStatisticsSensor(
         return rows[0] if rows else None
 
     def _statistics_metadata(self) -> StatisticMetaData:
+        # unit_class groups units into comparable categories for the energy dashboard.
+        _unit_class_map = {
+            SensorDeviceClass.ENERGY: "energy",
+            SensorDeviceClass.WATER:  "volume",
+        }
         return StatisticMetaData(
             name=self._attr_name,
             source=RECORDER_DOMAIN,
             statistic_id=self.entity_id,
             unit_of_measurement=self._attr_native_unit_of_measurement,
+            unit_class=_unit_class_map.get(self._attr_device_class),
             has_mean=False,
             has_sum=True,
             mean_type=StatisticMeanType.NONE,
