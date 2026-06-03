@@ -13,10 +13,8 @@ from custom_components.brunata_online.api.const import Interval, Consumption
 from .const import DOMAIN, SCAN_INTERVAL
 from .models import MeterDataSet
 
-# Fetch history from this fixed epoch on first run.
-# Brunata Online launched digital metering around 2015; starting earlier
-# than a customer's move-in date is fine — the API returns null consumption
-# for periods before the meter was registered, which we skip.
+# Brunata Online launched digital metering around 2015; earlier dates are safe —
+# the API returns null consumption for periods before a meter was registered.
 _HISTORY_EPOCH = datetime(2015, 1, 1, tzinfo=timezone.utc)
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
@@ -50,33 +48,74 @@ class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator[MeterDataSet]):
         ]
 
     async def _async_update_data(self) -> MeterDataSet:
-        """Fetch consumption data in 30-day chunks to stay within the API limit."""
+        """Fetch new consumption data since the last update (one chunk, incremental)."""
         try:
             end = datetime.now(tz=timezone.utc)
-            start = self._last_data_end if self._last_data_end is not None else _HISTORY_EPOCH
+            # On first scheduled poll, fetch only the most recent window.
+            # Full history is imported separately via async_import_full_history.
+            start = (
+                self._last_data_end
+                if self._last_data_end is not None
+                else end - timedelta(days=_API_CHUNK_DAYS)
+            )
 
             merged = self.data or MeterDataSet()
 
-            chunk_start = start
-            while chunk_start < end:
-                chunk_end = min(chunk_start + timedelta(days=_API_CHUNK_DAYS), end)
+            for q in self.queries:
+                try:
+                    consumption_type = Consumption(q["meter_type_code"])
+                except ValueError:
+                    _LOGGER.warning("Unknown meter type code: %s", q["meter_type_code"])
+                    continue
+                result = await self.api.get_consumption(
+                    start, end,
+                    consumption_type, q["allocation_unit"],
+                    Interval.DAY,
+                )
+                merged.update_from_api_result(result)
 
-                for q in self.queries:
-                    try:
-                        consumption_type = Consumption(q["meter_type_code"])
-                    except ValueError:
-                        _LOGGER.warning("Unknown meter type code: %s", q["meter_type_code"])
-                        continue
+            self._last_data_end = end
+            return merged
+        except Exception as exc:
+            raise UpdateFailed() from exc
+
+    async def async_import_full_history(self) -> None:
+        """Fetch the complete consumption history from 2015 to now.
+
+        Runs as a background task after entity setup so it does not block init.
+        Notifies all listeners when done so entities can import the statistics.
+        """
+        _LOGGER.info("Brunata: starting full history import from %s", _HISTORY_EPOCH.date())
+        end = datetime.now(tz=timezone.utc)
+        merged = self.data or MeterDataSet()
+
+        chunk_start = _HISTORY_EPOCH
+        while chunk_start < end:
+            chunk_end = min(chunk_start + timedelta(days=_API_CHUNK_DAYS), end)
+
+            for q in self.queries:
+                try:
+                    consumption_type = Consumption(q["meter_type_code"])
+                except ValueError:
+                    _LOGGER.warning("Unknown meter type code: %s", q["meter_type_code"])
+                    continue
+                try:
                     result = await self.api.get_consumption(
                         chunk_start, chunk_end,
                         consumption_type, q["allocation_unit"],
                         Interval.DAY,
                     )
                     merged.update_from_api_result(result)
+                except Exception:
+                    _LOGGER.warning(
+                        "Brunata: failed to fetch chunk %s–%s, skipping",
+                        chunk_start.date(), chunk_end.date(),
+                    )
 
-                chunk_start = chunk_end
+            chunk_start = chunk_end
 
-            self._last_data_end = end
-            return merged
-        except Exception as exc:
-            raise UpdateFailed() from exc
+        # Mark where we left off so the next periodic poll is incremental.
+        self._last_data_end = end
+        _LOGGER.info("Brunata: full history import complete")
+        # Notify entities so they trigger their statistics import.
+        self.async_set_updated_data(merged)

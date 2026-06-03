@@ -46,12 +46,10 @@ async def _statistics_need_reset(hass: HomeAssistant, stat_ids: list[str]) -> bo
         )
         rows = rows_by_id.get(stat_id, [])
 
-        # Missing stats → need a fresh import
         if not rows:
             _LOGGER.debug("No statistics found for %s — will do full reimport", stat_id)
             return True
 
-        # Non-monotonic sums → corruption
         for i in range(len(rows) - 1):
             # rows[i] is newer, rows[i+1] is older → newer sum must be ≥ older sum
             if rows[i]["sum"] < rows[i + 1]["sum"]:
@@ -77,6 +75,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         cookie_jar=CookieJar(unsafe=True, quote_cookie=False)
     )
 
+    # Verify we can reach the API and discover meters.  This is the only
+    # network call that blocks entry setup — everything else runs in the
+    # background task below.
     try:
         client = BrunataClient(
             entry.data[CONF_USERNAME],
@@ -90,17 +91,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(f"Failed to connect to Brunata: {err}") from err
 
     coordinator = BrunataOnlineDataUpdateCoordinator(hass, client=client, sensors_result=meters)
-    await coordinator.async_config_entry_first_refresh()
 
-    # Check whether existing statistics need a reset.  This is intentionally
-    # conservative: we only clear when we detect actual corruption (non-monotonic
-    # sums) or a complete absence of data.  Normal reloads/restarts leave the
-    # existing statistics untouched so the energy dashboard never loses history.
-    #
-    # When we do clear, we also reset _last_data_end so the next coordinator
-    # poll re-fetches the full 365-day history, guaranteeing the reimport has
-    # complete data even if the in-memory coordinator cache only covers a short
-    # window (e.g. if the reload happened mid-session).
+    # If existing statistics look corrupted, clear them so the background
+    # import starts with a clean slate.
     instance = get_instance(hass)
     if instance:
         registry = er.async_get(hass)
@@ -110,18 +103,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ]
         if stat_ids and await _statistics_need_reset(hass, stat_ids):
             _LOGGER.info(
-                "Resetting statistics for %d series — they will be reimported from full history",
+                "Clearing corrupted statistics for %d series — background task will reimport",
                 len(stat_ids),
             )
             instance.async_clear_statistics(stat_ids)
-            # Force the next coordinator poll to re-fetch the full 365-day window
-            # so _import_statistics has complete data to work with.
-            coordinator._last_data_end = None
 
     hass.data[DOMAIN][entry.entry_id] = {"coordinator": coordinator, "session": session}
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
+    # Fetch the full consumption history in the background so it does not
+    # delay entity registration or HA startup.  The task is tied to this
+    # config entry and is cancelled automatically on unload.
+    entry.async_create_background_task(
+        hass,
+        coordinator.async_import_full_history(),
+        name=f"brunata_history_{entry.entry_id}",
+    )
+
     return True
 
 

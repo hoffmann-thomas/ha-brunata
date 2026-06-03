@@ -128,10 +128,8 @@ class BrunataStatisticsSensor(
             name=f"brunata_import_initial_{self._meter.meter_id}",
         )
 
-    def async_will_remove_from_hass(self) -> None:
-        instance = get_instance(self.hass)
-        if instance:
-            instance.async_clear_statistics([self.entity_id])
+    async def async_will_remove_from_hass(self) -> None:
+        pass  # Statistics are intentionally preserved; _statistics_need_reset handles recovery
 
     @callback
     def _handle_coordinator_update(self) -> None:
