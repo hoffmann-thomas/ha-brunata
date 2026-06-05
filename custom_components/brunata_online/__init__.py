@@ -1,4 +1,5 @@
 """Brunata Online integration for Home Assistant."""
+
 from __future__ import annotations
 
 import asyncio
@@ -18,11 +19,6 @@ from .coordinator import BrunataOnlineDataUpdateCoordinator
 from .const import CONF_PASSWORD, CONF_USERNAME, DOMAIN, PLATFORMS, STARTUP_MESSAGE
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
-
-
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """YAML setup is not supported; only UI config entries."""
-    return True
 
 
 async def _statistics_need_reset(hass: HomeAssistant, stat_ids: list[str]) -> bool:
@@ -57,8 +53,10 @@ async def _statistics_need_reset(hass: HomeAssistant, stat_ids: list[str]) -> bo
                     "Corrupted statistics in %s: sum %.3f at ts=%d is less than "
                     "sum %.3f at ts=%d — will clear and reimport",
                     stat_id,
-                    rows[i]["sum"], rows[i]["start"],
-                    rows[i + 1]["sum"], rows[i + 1]["start"],
+                    rows[i]["sum"],
+                    rows[i]["start"],
+                    rows[i + 1]["sum"],
+                    rows[i + 1]["start"],
                 )
                 return True
 
@@ -90,7 +88,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await session.close()
         raise ConfigEntryNotReady(f"Failed to connect to Brunata: {err}") from err
 
-    coordinator = BrunataOnlineDataUpdateCoordinator(hass, client=client, sensors_result=meters)
+    coordinator = BrunataOnlineDataUpdateCoordinator(
+        hass, client=client, sensors_result=meters
+    )
 
     # If existing statistics look corrupted, clear them so the background
     # import starts with a clean slate.

@@ -4,7 +4,6 @@
   "codeowners": ["@hoffmann-thomas"],
   "config_flow": true,
   "version": "1.0.0",
-  "homeassistant": "2026.5.0",
   "dependencies": ["recorder"],
   "documentation": "https://github.com/hoffmann-thomas/ha-brunata",
   "issue_tracker": "https://github.com/hoffmann-thomas/ha-brunata/issues",
