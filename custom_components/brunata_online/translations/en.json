@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Brunata Online",
+        "description": "Enter your Brunata Online login credentials.",
+        "data": {
+          "username": "Username / Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "auth": "Invalid username or password."
+    },
+    "abort": {
+      "already_configured": "This Brunata account is already configured."
+    }
+  }
+}
