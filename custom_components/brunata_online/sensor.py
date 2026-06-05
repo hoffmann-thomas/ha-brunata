@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import unicodedata
 from datetime import UTC, datetime, timedelta
 
 from homeassistant.components.recorder import get_instance
@@ -43,13 +44,20 @@ _API_UNIT_MAP: dict[str, tuple[SensorDeviceClass, str]] = {
 
 
 def _resolve_unit(meter: Meter) -> tuple[SensorDeviceClass | None, str]:
-    api_unit = (meter.unit or "").strip()
+    api_unit = unicodedata.normalize("NFC", (meter.unit or "").strip())
     if api_unit in _API_UNIT_MAP:
         return _API_UNIT_MAP[api_unit]
+    api_lower = api_unit.casefold()
+    for key, val in _API_UNIT_MAP.items():
+        if unicodedata.normalize("NFC", key).casefold() == api_lower:
+            return val
     # Brunata's proprietary "units" (varmeenheder) have no HA equivalent.
-    # Use no device class so HA does not validate the unit against a unit_class.
-    _LOGGER.debug("Meter %s has unrecognised unit %r; storing as-is", meter.meter_id, api_unit)
-    return None, api_unit
+    # Fall back to kWh so the sensor is compatible with the HA energy dashboard.
+    _LOGGER.debug(
+        "Meter %s has unrecognised unit %r (bytes: %s); falling back to kWh",
+        meter.meter_id, api_unit, api_unit.encode(),
+    )
+    return SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR
 
 
 async def async_setup_entry(
@@ -149,6 +157,12 @@ class BrunataStatisticsSensor(
     # ── Statistics import ────────────────────────────────────────────────────
 
     async def _import_statistics(self) -> None:
+        if self.coordinator._initial_history_importing:
+            _LOGGER.debug(
+                "Full history import in progress; deferring statistics for meter %s",
+                self._meter.meter_id,
+            )
+            return
         meter_data = self.coordinator.data.get_meter(str(self._meter.meter_id))
         if meter_data is None:
             _LOGGER.debug("No data yet for meter %s", self._meter.meter_id)
@@ -181,6 +195,11 @@ class BrunataStatisticsSensor(
         statistics: list[StatisticData] = []
         total: float = last_stat["sum"] if last_stat else 0.0
         for ts, value in sorted(new_data.items()):
+            if value < 0:
+                _LOGGER.warning(
+                    "Meter %s: negative consumption %.4f at %s (API correction artifact)",
+                    self._meter.meter_id, value, ts.date(),
+                )
             total += value
             statistics.append(StatisticData(start=ts, sum=total))
 
@@ -194,17 +213,23 @@ class BrunataStatisticsSensor(
         return rows[0] if rows else None
 
     def _statistics_metadata(self) -> StatisticMetaData:
-        # unit_class groups units into comparable categories for the energy dashboard.
         _unit_class_map = {
             SensorDeviceClass.ENERGY: "energy",
             SensorDeviceClass.WATER:  "volume",
         }
+        unit_class = _unit_class_map.get(self._attr_device_class)
+        if unit_class is None and self._meter.meter_type_code == Consumption.HEATING.value:
+            _LOGGER.debug(
+                "Heating meter %s uses unrecognised unit %r — exposing with unit_class='energy'",
+                self._meter.meter_id, self._attr_native_unit_of_measurement,
+            )
+            unit_class = "energy"
         return StatisticMetaData(
             name=self._attr_name,
             source=RECORDER_DOMAIN,
             statistic_id=self.entity_id,
             unit_of_measurement=self._attr_native_unit_of_measurement,
-            unit_class=_unit_class_map.get(self._attr_device_class),
+            unit_class=unit_class,
             has_mean=False,
             has_sum=True,
             mean_type=StatisticMeanType.NONE,
