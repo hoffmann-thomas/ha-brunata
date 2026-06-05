@@ -39,10 +39,7 @@ class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator[MeterDataSet]):
         self._last_data_end: datetime | None = None
         self._initial_history_importing = True
 
-        seen = {
-            (s.meter_type_code, s.allocation_unit_code)
-            for s in sensors_result
-        }
+        seen = {(s.meter_type_code, s.allocation_unit_code) for s in sensors_result}
         self.queries = [
             {"meter_type_code": type_code, "allocation_unit": alloc_code}
             for type_code, alloc_code in seen
@@ -69,8 +66,10 @@ class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator[MeterDataSet]):
                     _LOGGER.warning("Unknown meter type code: %s", q["meter_type_code"])
                     continue
                 result = await self.api.get_consumption(
-                    start, end,
-                    consumption_type, q["allocation_unit"],
+                    start,
+                    end,
+                    consumption_type,
+                    q["allocation_unit"],
                     Interval.DAY,
                 )
                 merged.update_from_api_result(result)
@@ -86,7 +85,9 @@ class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator[MeterDataSet]):
         Runs as a background task after entity setup so it does not block init.
         Notifies all listeners when done so entities can import the statistics.
         """
-        _LOGGER.info("Brunata: starting full history import from %s", _HISTORY_EPOCH.date())
+        _LOGGER.info(
+            "Brunata: starting full history import from %s", _HISTORY_EPOCH.date()
+        )
         try:
             end = datetime.now(tz=timezone.utc)
             merged = self.data or MeterDataSet()
@@ -99,19 +100,24 @@ class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator[MeterDataSet]):
                     try:
                         consumption_type = Consumption(q["meter_type_code"])
                     except ValueError:
-                        _LOGGER.warning("Unknown meter type code: %s", q["meter_type_code"])
+                        _LOGGER.warning(
+                            "Unknown meter type code: %s", q["meter_type_code"]
+                        )
                         continue
                     try:
                         result = await self.api.get_consumption(
-                            chunk_start, chunk_end,
-                            consumption_type, q["allocation_unit"],
+                            chunk_start,
+                            chunk_end,
+                            consumption_type,
+                            q["allocation_unit"],
                             Interval.DAY,
                         )
                         merged.update_from_api_result(result)
                     except Exception:
                         _LOGGER.warning(
                             "Brunata: failed to fetch chunk %s–%s, skipping",
-                            chunk_start.date(), chunk_end.date(),
+                            chunk_start.date(),
+                            chunk_end.date(),
                         )
 
                 chunk_start = chunk_end

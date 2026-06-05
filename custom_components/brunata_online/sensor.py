@@ -1,4 +1,5 @@
 """Sensor platform for Brunata Online."""
+
 from __future__ import annotations
 
 import logging
@@ -13,7 +14,11 @@ from homeassistant.components.recorder.statistics import (
     async_import_statistics,
     get_last_statistics,
 )
-from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorStateClass,
+    SensorEntity,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
@@ -32,13 +37,13 @@ _LOGGER = logging.getLogger(__name__)
 # Maps Brunata API unit strings to (HA device class, HA native unit).
 # Brunata "units" (varmeenheder) have no standard energy equivalent and are stored as-is.
 _API_UNIT_MAP: dict[str, tuple[SensorDeviceClass, str]] = {
-    "m³":  (SensorDeviceClass.WATER,  UnitOfVolume.CUBIC_METERS),
-    "m3":  (SensorDeviceClass.WATER,  UnitOfVolume.CUBIC_METERS),
-    "GJ":  (SensorDeviceClass.ENERGY, UnitOfEnergy.GIGA_JOULE),
-    "MJ":  (SensorDeviceClass.ENERGY, UnitOfEnergy.MEGA_JOULE),
+    "m³": (SensorDeviceClass.WATER, UnitOfVolume.CUBIC_METERS),
+    "m3": (SensorDeviceClass.WATER, UnitOfVolume.CUBIC_METERS),
+    "GJ": (SensorDeviceClass.ENERGY, UnitOfEnergy.GIGA_JOULE),
+    "MJ": (SensorDeviceClass.ENERGY, UnitOfEnergy.MEGA_JOULE),
     "kWh": (SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR),
     "KWh": (SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR),
-    "Wh":  (SensorDeviceClass.ENERGY, UnitOfEnergy.WATT_HOUR),
+    "Wh": (SensorDeviceClass.ENERGY, UnitOfEnergy.WATT_HOUR),
     "MWh": (SensorDeviceClass.ENERGY, UnitOfEnergy.MEGA_WATT_HOUR),
 }
 
@@ -55,7 +60,9 @@ def _resolve_unit(meter: Meter) -> tuple[SensorDeviceClass | None, str]:
     # Fall back to kWh so the sensor is compatible with the HA energy dashboard.
     _LOGGER.debug(
         "Meter %s has unrecognised unit %r (bytes: %s); falling back to kWh",
-        meter.meter_id, api_unit, api_unit.encode(),
+        meter.meter_id,
+        api_unit,
+        api_unit.encode(),
     )
     return SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR
 
@@ -66,9 +73,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Brunata sensors from a config entry."""
-    coordinator: BrunataOnlineDataUpdateCoordinator = (
-        hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    )
+    coordinator: BrunataOnlineDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id][
+        "coordinator"
+    ]
 
     entities = []
     for meter in coordinator.sensors:
@@ -77,7 +84,8 @@ async def async_setup_entry(
         except ValueError:
             _LOGGER.warning(
                 "Unknown meter type code %s for meter %s — skipping",
-                meter.meter_type_code, meter.meter_id,
+                meter.meter_type_code,
+                meter.meter_id,
             )
             continue
         entities.append(BrunataStatisticsSensor(coordinator, entry, meter))
@@ -152,7 +160,9 @@ class BrunataStatisticsSensor(
         try:
             await self._import_statistics()
         except Exception:
-            _LOGGER.exception("Error importing statistics for meter %s", self._meter.meter_id)
+            _LOGGER.exception(
+                "Error importing statistics for meter %s", self._meter.meter_id
+            )
 
     # ── Statistics import ────────────────────────────────────────────────────
 
@@ -183,7 +193,8 @@ class BrunataStatisticsSensor(
         if last_stat is not None:
             cutoff = datetime.fromtimestamp(last_stat["start"], tz=UTC)
             new_data = {
-                k: v for k, v in meter_data.values.items()
+                k: v
+                for k, v in meter_data.values.items()
                 if cutoff < k and _is_complete(k)
             }
         else:
@@ -198,7 +209,9 @@ class BrunataStatisticsSensor(
             if value < 0:
                 _LOGGER.warning(
                     "Meter %s: negative consumption %.4f at %s (API correction artifact)",
-                    self._meter.meter_id, value, ts.date(),
+                    self._meter.meter_id,
+                    value,
+                    ts.date(),
                 )
             total += value
             statistics.append(StatisticData(start=ts, sum=total))
@@ -215,13 +228,17 @@ class BrunataStatisticsSensor(
     def _statistics_metadata(self) -> StatisticMetaData:
         _unit_class_map = {
             SensorDeviceClass.ENERGY: "energy",
-            SensorDeviceClass.WATER:  "volume",
+            SensorDeviceClass.WATER: "volume",
         }
         unit_class = _unit_class_map.get(self._attr_device_class)
-        if unit_class is None and self._meter.meter_type_code == Consumption.HEATING.value:
+        if (
+            unit_class is None
+            and self._meter.meter_type_code == Consumption.HEATING.value
+        ):
             _LOGGER.debug(
                 "Heating meter %s uses unrecognised unit %r — exposing with unit_class='energy'",
-                self._meter.meter_id, self._attr_native_unit_of_measurement,
+                self._meter.meter_id,
+                self._attr_native_unit_of_measurement,
             )
             unit_class = "energy"
         return StatisticMetaData(
