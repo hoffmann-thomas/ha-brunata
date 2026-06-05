@@ -9,6 +9,5 @@
   "issue_tracker": "https://github.com/hoffmann-thomas/ha-brunata/issues",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
-  "platforms": ["sensor"],
   "requirements": []
 }

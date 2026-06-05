@@ -3,12 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from custom_components.brunata_online.api.brunata_api.meter_reader import ConsumptionReading
+from custom_components.brunata_online.api.brunata_api.meter_reader import (
+    ConsumptionReading,
+)
 
 
 @dataclass
 class MeterData:
     """Time-series data for one meter."""
+
     meter_id: str
     values: dict[datetime, float] = field(default_factory=dict)
 
@@ -30,6 +33,7 @@ class MeterData:
 @dataclass
 class MeterDataSet:
     """All meters known to the coordinator."""
+
     meters: dict[str, MeterData] = field(default_factory=dict)
 
     def update_from_api_result(self, result: list[ConsumptionReading]) -> None:

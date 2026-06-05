@@ -1,4 +1,5 @@
 """Constants for Brunata Online."""
+
 from datetime import timedelta
 
 NAME = "Brunata Online"

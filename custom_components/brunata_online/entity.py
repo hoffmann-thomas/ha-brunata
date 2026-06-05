@@ -1,4 +1,5 @@
 """Shared device_info for all Brunata Online entities."""
+
 from homeassistant.helpers.entity import DeviceInfo
 
 from .const import DOMAIN, NAME, VERSION

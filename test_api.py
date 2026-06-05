@@ -2,6 +2,7 @@
 Quick API connectivity test — run from the project root with:
   .venv/Scripts/python test_api.py
 """
+
 import asyncio
 import os
 import sys
@@ -9,17 +10,31 @@ import types
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+
 # Stub out homeassistant so the package __init__.py can be imported
 # without a full HA installation. Any attribute access on a stub returns
 # another stub so the entire HA namespace is covered automatically.
 class _Stub:
     """Returns itself for any attribute, call, or subclass operation."""
-    def __getattr__(self, _): return _Stub()
-    def __call__(self, *a, **kw): return _Stub()
-    def __getitem__(self, _): return _Stub()
-    def __mro_entries__(self, bases): return (object,)
-    def __init_subclass__(cls, **kw): pass
-    def __class_getitem__(cls, _): return cls
+
+    def __getattr__(self, _):
+        return _Stub()
+
+    def __call__(self, *a, **kw):
+        return _Stub()
+
+    def __getitem__(self, _):
+        return _Stub()
+
+    def __mro_entries__(self, bases):
+        return (object,)
+
+    def __init_subclass__(cls, **kw):
+        pass
+
+    def __class_getitem__(cls, _):
+        return cls
+
 
 class _HAModule(types.ModuleType):
     def __getattr__(self, name):
@@ -27,10 +42,12 @@ class _HAModule(types.ModuleType):
         setattr(self, name, stub)
         return stub
 
+
 def _stub_ha(*names):
     for name in names:
         if name not in sys.modules:
             sys.modules[name] = _HAModule(name)
+
 
 _stub_ha(
     "homeassistant",
@@ -50,8 +67,8 @@ _stub_ha(
     "homeassistant.util",
 )
 
-import aiohttp
-from aiohttp import CookieJar
+import aiohttp  # noqa: E402
+from aiohttp import CookieJar  # noqa: E402
 
 USERNAME = os.getenv("BRUNATA_USERNAME", "")
 PASSWORD = os.getenv("BRUNATA_PASSWORD", "")
@@ -67,7 +84,9 @@ async def main():
     )
     try:
         from custom_components.brunata_online.api.brunata_api.api2 import BrunataApi
-        from custom_components.brunata_online.api.brunata_api.client import BrunataClient
+        from custom_components.brunata_online.api.brunata_api.client import (
+            BrunataClient,
+        )
         from custom_components.brunata_online.api.const import Consumption, Interval
         import datetime
 
@@ -96,14 +115,22 @@ async def main():
         client = BrunataClient(USERNAME, PASSWORD, session, "en")
         meters = await client.get_meters()
         for m in meters:
-            print(f"   [{m.meter_type_code}] {m.value_category} — id={m.meter_id} unit={m.unit} alloc={m.allocation_unit_code}")
+            print(
+                f"   [{m.meter_type_code}] {m.value_category} — id={m.meter_id} unit={m.unit} alloc={m.allocation_unit_code}"
+            )
 
         if meters:
             print("\n-- 5. Consumption (last 30 days) --")
             end = datetime.datetime.today()
             start = end - datetime.timedelta(days=30)
             m = meters[0]
-            readings = await client.get_consumption(start, end, Consumption(m.meter_type_code), m.allocation_unit_code, Interval.DAY)
+            readings = await client.get_consumption(
+                start,
+                end,
+                Consumption(m.meter_type_code),
+                m.allocation_unit_code,
+                Interval.DAY,
+            )
             for r in readings:
                 for v in r.Values:
                     if v.consumption is not None:

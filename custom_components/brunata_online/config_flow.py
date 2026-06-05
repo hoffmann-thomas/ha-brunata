@@ -1,4 +1,5 @@
 """Config flow for Brunata Online."""
+
 from __future__ import annotations
 
 import logging
@@ -47,12 +48,15 @@ class BrunataOnlineFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> BrunataOnlineOptionsFlowHandler:
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> BrunataOnlineOptionsFlowHandler:
         return BrunataOnlineOptionsFlowHandler()
 
     async def _test_credentials(self, username: str, password: str) -> bool:
         """Validate by attempting Keycloak authentication — does not check consumer access."""
         from .api.brunata_api.api2 import BrunataApi
+
         session = aiohttp.ClientSession(
             cookie_jar=CookieJar(unsafe=True, quote_cookie=False)
         )

@@ -6,7 +6,9 @@ import re
 import secrets
 import urllib.parse
 from asyncio import timeout as async_timeout
-from datetime import datetime  # noqa: F401 — was previously imported via wildcard from models
+from datetime import (
+    datetime,
+)  # noqa: F401 — was previously imported via wildcard from models
 from socket import gaierror
 
 from aiohttp import ClientError, ClientResponse, ClientSession
@@ -118,7 +120,9 @@ class BrunataApi:
             if resp.status == 302:
                 loc = resp.headers.get("Location", "")
                 if loc.startswith(REDIRECT) and "code=" in loc:
-                    auth_code = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)["code"][0]
+                    auth_code = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)[
+                        "code"
+                    ][0]
                     return await self._exchange_code(auth_code, code_verifier)
                 _LOGGER.error("Unexpected redirect from Keycloak auth: %s", loc[:200])
                 return {}
@@ -148,16 +152,25 @@ class BrunataApi:
                 # Extract Keycloak error message from the page
                 err_match = re.search(
                     r'class="[^"]*(?:pf-c-alert__title|kc-feedback-text|alert-error)[^"]*"[^>]*>(.*?)</(?:span|p|div)',
-                    body, re.S
+                    body,
+                    re.S,
                 )
-                kc_error = re.sub(r"<[^>]+>", "", err_match.group(1)).strip() if err_match else "no error text found"
+                kc_error = (
+                    re.sub(r"<[^>]+>", "", err_match.group(1)).strip()
+                    if err_match
+                    else "no error text found"
+                )
                 _LOGGER.error(
                     "Credential POST failed — status=%d location=%s keycloak_error=%s",
-                    resp.status, redirect_loc[:200], kc_error,
+                    resp.status,
+                    redirect_loc[:200],
+                    kc_error,
                 )
                 return {}
 
-        auth_code = urllib.parse.parse_qs(urllib.parse.urlparse(redirect_loc).query)["code"][0]
+        auth_code = urllib.parse.parse_qs(urllib.parse.urlparse(redirect_loc).query)[
+            "code"
+        ][0]
         return await self._exchange_code(auth_code, code_verifier)
 
     async def _exchange_code(self, auth_code: str, code_verifier: str) -> dict:
@@ -230,7 +243,9 @@ class BrunataApi:
 
     # ── Public API methods ──────────────────────────────────────────────────────
 
-    async def get_mapping_configuration(self, locale: str = "en") -> Result[MappersConfiguration]:
+    async def get_mapping_configuration(
+        self, locale: str = "en"
+    ) -> Result[MappersConfiguration]:
         if not await self._get_tokens():
             return Result[MappersConfiguration](Exception("Failed to get tokens"))
         response = await self._api_wrapper(
@@ -240,7 +255,9 @@ class BrunataApi:
         )
         if response.is_error():
             return Result[MappersConfiguration](response.value)
-        return Result[MappersConfiguration]((await from_response(response.value, Configuration, False)).mappers)
+        return Result[MappersConfiguration](
+            (await from_response(response.value, Configuration, False)).mappers
+        )
 
     async def get_allocation_units(self) -> Result[AllocationUnitResult]:
         if not await self._get_tokens():
@@ -252,7 +269,9 @@ class BrunataApi:
         )
         if response.is_error():
             return Result[AllocationUnitResult](response.value)
-        return Result[AllocationUnitResult](await from_response(response.value, AllocationUnitResult))
+        return Result[AllocationUnitResult](
+            await from_response(response.value, AllocationUnitResult)
+        )
 
     async def get_meters(self) -> Result[MeterResult]:
         if not await self._get_tokens():
@@ -266,7 +285,9 @@ class BrunataApi:
         )
         if response.is_error():
             return Result[MeterResult](response.value)
-        return Result[MeterResult](await from_response(response.value, MeterResult, False))
+        return Result[MeterResult](
+            await from_response(response.value, MeterResult, False)
+        )
 
     async def get_consumption(
         self,
@@ -292,4 +313,6 @@ class BrunataApi:
         )
         if response.is_error():
             return Result[ConsumptionResult](response.value)
-        return Result[ConsumptionResult](await from_response(response.value, ConsumptionResult, False))
+        return Result[ConsumptionResult](
+            await from_response(response.value, ConsumptionResult, False)
+        )

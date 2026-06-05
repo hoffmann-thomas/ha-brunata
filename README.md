@@ -52,13 +52,13 @@ Imports historical heating and water consumption data from [Brunata Online](http
 
 For each registered meter, a sensor is created:
 
-| Meter type | Example entity | Unit | Device class |
-|---|---|---|---|
-| Radiator (heating) | `sensor.brunata_heating_livingroom` | units* | Energy |
-| Hot water | `sensor.brunata_hot_water_kitchen` | m³ | Water |
-| Cold water | `sensor.brunata_cold_water_kitchen` | m³ | Water |
+| Meter type         | Example entity                      | Unit    | Device class |
+| ------------------ | ----------------------------------- | ------- | ------------ |
+| Radiator (heating) | `sensor.brunata_heating_livingroom` | units\* | Energy       |
+| Hot water          | `sensor.brunata_hot_water_kitchen`  | m³      | Water        |
+| Cold water         | `sensor.brunata_cold_water_kitchen` | m³      | Water        |
 
-> *Brunata radiator sensors report in **varmeenheder** (heat units) — a proprietary Brunata allocation unit, not a standard energy unit. The values represent your proportional share of the building's total heating consumption.
+> \*Brunata radiator sensors report in **varmeenheder** (heat units) — a proprietary Brunata allocation unit, not a standard energy unit. The values represent your proportional share of the building's total heating consumption.
 
 ## Energy Dashboard
 
@@ -80,14 +80,17 @@ Heating sensors appear under **Individual devices** (since varmeenheder is not a
 ## Troubleshooting
 
 **"Failed to connect to Brunata" on setup**
+
 - Verify you can log in at [online.brunata.com](https://online.brunata.com)
 - Check that your account has at least one registered meter
 
 **No data in Energy Dashboard after setup**
+
 - Wait up to 15 minutes for the first data import to complete (365 days fetched in 30-day chunks)
 - Ensure the sensors have been added to the Energy Dashboard configuration
 
 **Negative today's usage**
+
 - This can happen if the previous daily total was imported with a partial value that was later revised. Removing and re-adding the sensor to the Energy Dashboard configuration resets the baseline
 
 ## Contributing

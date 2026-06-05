@@ -1,7 +1,7 @@
 from typing import Generic, TypeVar, Callable
 
-T = TypeVar('T')
-U = TypeVar('U')
+T = TypeVar("T")
+U = TypeVar("U")
 
 
 class Result(Generic[T]):
@@ -20,6 +20,6 @@ class Result(Generic[T]):
         return isinstance(self.value, Exception)
 
     def __await__(self):
-        if self.is_error(): #Fix this
+        if self.is_error():  # Fix this
             return self
         return self.value.__await__()
