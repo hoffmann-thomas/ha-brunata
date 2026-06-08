@@ -38,7 +38,7 @@ async def _statistics_need_reset(hass: HomeAssistant, stat_ids: list[str]) -> bo
 
     for stat_id in stat_ids:
         rows_by_id = await instance.async_add_executor_job(
-            get_last_statistics, hass, 10, stat_id, True, {"sum"}
+            get_last_statistics, hass, 200, stat_id, True, {"sum"}
         )
         rows = rows_by_id.get(stat_id, [])
 

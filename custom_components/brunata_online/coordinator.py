@@ -37,7 +37,7 @@ class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator[MeterDataSet]):
         self.sensors = sensors_result
         self.data = MeterDataSet()
         self._last_data_end: datetime | None = None
-        self._initial_history_importing = True
+        self._history_import_complete = False
 
         seen = {(s.meter_type_code, s.allocation_unit_code) for s in sensors_result}
         self.queries = [
@@ -122,8 +122,13 @@ class BrunataOnlineDataUpdateCoordinator(DataUpdateCoordinator[MeterDataSet]):
 
                 chunk_start = chunk_end
 
+            # Mark where we left off so the next periodic poll is incremental.
             self._last_data_end = end
             _LOGGER.info("Brunata: full history import complete")
+            # Allow statistics imports to proceed now that the baseline is ready.
+            self._history_import_complete = True
+            # Notify entities so they trigger their statistics import.
             self.async_set_updated_data(merged)
         finally:
-            self._initial_history_importing = False
+            # Ensure live polls are never blocked permanently if the fetch fails.
+            self._history_import_complete = True

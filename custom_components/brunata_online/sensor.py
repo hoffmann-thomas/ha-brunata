@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import unicodedata
 from datetime import UTC, datetime, timedelta
@@ -127,6 +128,7 @@ class BrunataStatisticsSensor(
         device_class, native_unit = _resolve_unit(meter)
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = native_unit
+        self._import_lock = asyncio.Lock()
 
     @property
     def native_value(self) -> float | None:
@@ -167,18 +169,29 @@ class BrunataStatisticsSensor(
     # ── Statistics import ────────────────────────────────────────────────────
 
     async def _import_statistics(self) -> None:
-        if self.coordinator._initial_history_importing:
-            _LOGGER.debug(
-                "Full history import in progress; deferring statistics for meter %s",
-                self._meter.meter_id,
-            )
-            return
+        async with self._import_lock:
+            await self._do_import_statistics()
+
+    async def _do_import_statistics(self) -> None:
         meter_data = self.coordinator.data.get_meter(str(self._meter.meter_id))
         if meter_data is None:
             _LOGGER.debug("No data yet for meter %s", self._meter.meter_id)
             return
 
         last_stat = await self._get_last_stat()
+
+        # Fix A+B: if there is no existing baseline in the DB, the history
+        # import has not yet run.  A live-poll import starting from sum=0
+        # would corrupt the series when history arrives later with older
+        # (but correctly accumulated) sums.  Skip until history is done;
+        # async_import_full_history sets _history_import_complete=True and
+        # then calls async_set_updated_data, which re-triggers this path.
+        if last_stat is None and not self.coordinator._history_import_complete:
+            _LOGGER.debug(
+                "Meter %s: deferring statistics import until history is complete",
+                self._meter.meter_id,
+            )
+            return
 
         # Only insert completed Danish days.
         # Each Brunata daily entry covers midnight-to-midnight CEST.
