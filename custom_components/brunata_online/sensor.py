@@ -221,11 +221,12 @@ class BrunataStatisticsSensor(
         for ts, value in sorted(new_data.items()):
             if value < 0:
                 _LOGGER.warning(
-                    "Meter %s: negative consumption %.4f at %s (API correction artifact)",
+                    "Meter %s: skipping negative consumption %.4f at %s (API correction artifact)",
                     self._meter.meter_id,
                     value,
                     ts.date(),
                 )
+                continue
             total += value
             statistics.append(StatisticData(start=ts, sum=total))
 
