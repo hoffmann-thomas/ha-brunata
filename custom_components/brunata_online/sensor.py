@@ -133,7 +133,7 @@ class BrunataStatisticsSensor(
     @property
     def native_value(self) -> float | None:
         data: MeterDataSet = self.coordinator.data
-        return data.get_latest_value(str(self._meter.meter_id))
+        return data.get_cumulative_value(str(self._meter.meter_id))
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -219,14 +219,6 @@ class BrunataStatisticsSensor(
         statistics: list[StatisticData] = []
         total: float = last_stat["sum"] if last_stat else 0.0
         for ts, value in sorted(new_data.items()):
-            if value < 0:
-                _LOGGER.warning(
-                    "Meter %s: skipping negative consumption %.4f at %s (API correction artifact)",
-                    self._meter.meter_id,
-                    value,
-                    ts.date(),
-                )
-                continue
             total += value
             statistics.append(StatisticData(start=ts, sum=total))
 

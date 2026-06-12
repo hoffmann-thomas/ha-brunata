@@ -39,3 +39,6 @@ docs/json
 
 # macOS
 .DS_Store
+
+# Serena (AI coding assistant)
+.serena/

@@ -29,6 +29,11 @@ class MeterData:
             return None
         return self.values[max(self.values)]
 
+    def cumulative_value(self) -> float | None:
+        if not self.values:
+            return None
+        return sum(self.values.values())
+
 
 @dataclass
 class MeterDataSet:
@@ -45,6 +50,10 @@ class MeterDataSet:
     def get_latest_value(self, meter_id: str) -> float | None:
         meter = self.meters.get(meter_id)
         return meter.latest_value() if meter else None
+
+    def get_cumulative_value(self, meter_id: str) -> float | None:
+        meter = self.meters.get(meter_id)
+        return meter.cumulative_value() if meter else None
 
     def get_meter(self, meter_id: str) -> MeterData | None:
         return self.meters.get(meter_id)
